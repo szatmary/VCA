@@ -8,17 +8,20 @@
  * form reduces per-row multiply count by ~3-4x versus the naive
  * matrix-vector formulation.
  *
- * All butterfly arithmetic and dot products run in int32 scalar math.
- * An int16-lane butterfly (e.g. via hn::Reverse + Add/Sub) cannot stay
- * bit-exact with the scalar reference: the second DCT pass operates on
- * the first pass's int16 coefficients, and E[k] = src[k] + src[N-1-k]
- * on those inputs can overflow int16. The scalar reference uses `int`
- * for the E/O/EE/... temporaries, so we match that precision here.
- * The speedup over the prior matrix-vector kernels comes entirely from
- * the reduced multiply count, not from SIMD lane throughput on the
- * dot products themselves. The file still lives in the Highway per-
- * target translation unit so HWY_EXPORT / HWY_DYNAMIC_DISPATCH dispatch
- * continues to work the same way as the rest of the analyzer kernels.
+ * Butterfly arithmetic runs on int32-promoted lanes. An int16-lane
+ * butterfly would overflow on pass 2 of the DCT, because pass-1
+ * coefficients exceed int16 range when E[k] = src[k] + src[N-1-k] is
+ * formed. Loading int16 source, promoting to int32 via hn::PromoteTo,
+ * and running every butterfly/dot-product stage in int32 matches the
+ * scalar reference bit-for-bit while keeping full SIMD throughput.
+ * Short dot products (length-2 on EEE/EEEE, length-4 on EO/EEO) stay
+ * scalar — the vector setup cost exceeds the gain at that size.
+ *
+ * HWY_SCALAR has HWY_LANES == 1 (no multi-lane vectors, no UpperHalf),
+ * so the vector forms collapse to per-element work. The scalar target
+ * keeps the plain scalar butterfly for that reason. Every real SIMD
+ * target (NEON, NEON_BF16, EMU128, SSE4, AVX2, ...) runs the
+ * vectorized path.
  */
 
 #include <cstdint>
@@ -137,31 +140,47 @@ alignas(16) static constexpr int16_t kT32[32][32] = {
 // One row of an 8x8 DCT: writes 8 output coefficients, each into dst[k*dstStride]
 // (so both the row-major and column-major passes share this helper).
 //
-// Factored butterfly form, mirroring partialButterfly8 in
-// DCTTransformsNative.cpp. All arithmetic is scalar int32 — see the
-// file header for why an int16-lane butterfly would break bit-exactness.
+// Factored butterfly form mirroring partialButterfly8 in
+// DCTTransformsNative.cpp. Butterfly runs on 4-lane int32 vectors; the
+// length-4 dot products on O stay scalar because the vector-setup cost
+// exceeds the gain at that size.
 template <int Shift>
 static HWY_INLINE void Dct8Row(const int16_t *src, int16_t *dst, intptr_t dstStride)
 {
     constexpr int32_t kAdd = 1 << (Shift - 1);
 
-    // E[k] = src[k] + src[7-k], O[k] = src[k] - src[7-k] for k = 0..3.
-    // Intermediate values are computed in int32 because the second DCT pass
-    // can produce pass-1 coefficients whose sum exceeds int16 range.
-    const int E0 = src[0] + src[7];
-    const int E1 = src[1] + src[6];
-    const int E2 = src[2] + src[5];
-    const int E3 = src[3] + src[4];
-    const int O0 = src[0] - src[7];
-    const int O1 = src[1] - src[6];
-    const int O2 = src[2] - src[5];
-    const int O3 = src[3] - src[4];
+#if HWY_TARGET != HWY_SCALAR
+    const hn::CappedTag<int32_t, 4> d32;
+    const hn::Rebind<int16_t, decltype(d32)> d16_half;  // 4-lane int16
+
+    // Load src[0..3] and src[4..7] as 4-lane int16, promote to int32.
+    const auto lo32 = hn::PromoteTo(d32, hn::LoadU(d16_half, src));
+    const auto hi32 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 4));
+    const auto hiRev32 = hn::Reverse(d32, hi32);  // [s7, s6, s5, s4]
+
+    // E[0..3] = src[0..3] + src[7..4],  O[0..3] = src[0..3] - src[7..4]
+    const auto Ev = hn::Add(lo32, hiRev32);
+    const auto Ov = hn::Sub(lo32, hiRev32);
+
+    alignas(16) int32_t E[4];
+    alignas(16) int32_t O[4];
+    hn::StoreU(Ev, d32, E);
+    hn::StoreU(Ov, d32, O);
+#else
+    int32_t E[4];
+    int32_t O[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        E[k] = src[k] + src[7 - k];
+        O[k] = src[k] - src[7 - k];
+    }
+#endif
 
     // EE[0..1] and EO[0..1] — scalar, only 2 elements each.
-    const int EE0 = E0 + E3;
-    const int EE1 = E1 + E2;
-    const int EO0 = E0 - E3;
-    const int EO1 = E1 - E2;
+    const int32_t EE0 = E[0] + E[3];
+    const int32_t EE1 = E[1] + E[2];
+    const int32_t EO0 = E[0] - E[3];
+    const int32_t EO1 = E[1] - E[2];
 
     // Even-indexed outputs: length-2 dot products on EE / EO.
     dst[0 * dstStride] = static_cast<int16_t>(
@@ -176,13 +195,13 @@ static HWY_INLINE void Dct8Row(const int16_t *src, int16_t *dst, intptr_t dstStr
     // Odd-indexed outputs: length-4 dot products on O. Scalar is fine
     // here — 4 outputs × 4 terms is too small to benefit from SIMD.
     dst[1 * dstStride] = static_cast<int16_t>(
-        (kT8[1][0] * O0 + kT8[1][1] * O1 + kT8[1][2] * O2 + kT8[1][3] * O3 + kAdd) >> Shift);
+        (kT8[1][0] * O[0] + kT8[1][1] * O[1] + kT8[1][2] * O[2] + kT8[1][3] * O[3] + kAdd) >> Shift);
     dst[3 * dstStride] = static_cast<int16_t>(
-        (kT8[3][0] * O0 + kT8[3][1] * O1 + kT8[3][2] * O2 + kT8[3][3] * O3 + kAdd) >> Shift);
+        (kT8[3][0] * O[0] + kT8[3][1] * O[1] + kT8[3][2] * O[2] + kT8[3][3] * O[3] + kAdd) >> Shift);
     dst[5 * dstStride] = static_cast<int16_t>(
-        (kT8[5][0] * O0 + kT8[5][1] * O1 + kT8[5][2] * O2 + kT8[5][3] * O3 + kAdd) >> Shift);
+        (kT8[5][0] * O[0] + kT8[5][1] * O[1] + kT8[5][2] * O[2] + kT8[5][3] * O[3] + kAdd) >> Shift);
     dst[7 * dstStride] = static_cast<int16_t>(
-        (kT8[7][0] * O0 + kT8[7][1] * O1 + kT8[7][2] * O2 + kT8[7][3] * O3 + kAdd) >> Shift);
+        (kT8[7][0] * O[0] + kT8[7][1] * O[1] + kT8[7][2] * O[2] + kT8[7][3] * O[3] + kAdd) >> Shift);
 }
 
 // Template on Shift1 (bit-depth-dependent). Shift2 is fixed at 9 for Dct8.
@@ -212,38 +231,65 @@ void Dct8Impl_bd10(const int16_t *s, int16_t *d, intptr_t st) { Dct8ImplT<4>(s, 
 void Dct8Impl_bd12(const int16_t *s, int16_t *d, intptr_t st) { Dct8ImplT<6>(s, d, st); }
 
 // One row of a 16x16 DCT. Factored butterfly mirroring partialButterfly16.
-// All butterfly arithmetic runs in int32 to match the scalar reference
-// bit-for-bit: pass-2 inputs (pass-1 coefficients) can exceed int16 range
-// when summed/differenced, so the butterfly cannot stay in int16 lanes.
+// Butterfly runs on 4-lane int32 vectors; length-8 dot products on O run
+// as two vector Mul + Add + ReduceSum. Length-4 dot products on EO stay
+// scalar (too small to win on SIMD).
 template <int Shift>
 static HWY_INLINE void Dct16Row(const int16_t *src, int16_t *dst, intptr_t dstStride)
 {
     constexpr int32_t kAdd = 1 << (Shift - 1);
 
+#if HWY_TARGET != HWY_SCALAR
+    const hn::CappedTag<int32_t, 4> d32;
+    const hn::Rebind<int16_t, decltype(d32)> d16_half;  // 4-lane int16
+
+    // Load src[0..3], src[4..7], src[8..11], src[12..15] and promote to int32.
+    const auto s0 = hn::PromoteTo(d32, hn::LoadU(d16_half, src));       // src[0..3]
+    const auto s1 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 4));   // src[4..7]
+    const auto s2 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 8));   // src[8..11]
+    const auto s3 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 12));  // src[12..15]
+
     // E[k] = src[k] + src[15-k], O[k] = src[k] - src[15-k] for k = 0..7.
-    int E[8];
-    int O[8];
+    // E[0..3] = s0 + Reverse(s3),  E[4..7] = s1 + Reverse(s2)
+    const auto s3_rev = hn::Reverse(d32, s3);  // [src[15], src[14], src[13], src[12]]
+    const auto s2_rev = hn::Reverse(d32, s2);  // [src[11], src[10], src[9], src[8]]
+
+    const auto E_03 = hn::Add(s0, s3_rev);  // E[0..3]
+    const auto E_47 = hn::Add(s1, s2_rev);  // E[4..7]
+    const auto O_03 = hn::Sub(s0, s3_rev);  // O[0..3]
+    const auto O_47 = hn::Sub(s1, s2_rev);  // O[4..7]
+
+    // EE[k] = E[k] + E[7-k], EO[k] = E[k] - E[7-k] for k = 0..3.
+    const auto E_47_rev = hn::Reverse(d32, E_47);  // [E[7], E[6], E[5], E[4]]
+    const auto EEv = hn::Add(E_03, E_47_rev);      // EE[0..3]
+    const auto EOv = hn::Sub(E_03, E_47_rev);      // EO[0..3]
+
+    alignas(16) int32_t EE[4];
+    alignas(16) int32_t EO[4];
+    hn::StoreU(EEv, d32, EE);
+    hn::StoreU(EOv, d32, EO);
+#else
+    int32_t E[8];
+    int32_t O_arr_scalar[8];
     for (int k = 0; k < 8; ++k)
     {
         E[k] = src[k] + src[15 - k];
-        O[k] = src[k] - src[15 - k];
+        O_arr_scalar[k] = src[k] - src[15 - k];
     }
+    int32_t EE[4];
+    int32_t EO[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        EE[k] = E[k] + E[7 - k];
+        EO[k] = E[k] - E[7 - k];
+    }
+#endif
 
-    // EE[k] = E[k] + E[7-k], EO[k] = E[k] - E[7-k] for k = 0..3.
-    const int EE0 = E[0] + E[7];
-    const int EE1 = E[1] + E[6];
-    const int EE2 = E[2] + E[5];
-    const int EE3 = E[3] + E[4];
-    const int EO0 = E[0] - E[7];
-    const int EO1 = E[1] - E[6];
-    const int EO2 = E[2] - E[5];
-    const int EO3 = E[3] - E[4];
-
-    // EEE and EEO — length-2 each.
-    const int EEE0 = EE0 + EE3;
-    const int EEE1 = EE1 + EE2;
-    const int EEO0 = EE0 - EE3;
-    const int EEO1 = EE1 - EE2;
+    // EEE and EEO — length-2 each, scalar.
+    const int32_t EEE0 = EE[0] + EE[3];
+    const int32_t EEE1 = EE[1] + EE[2];
+    const int32_t EEO0 = EE[0] - EE[3];
+    const int32_t EEO1 = EE[1] - EE[2];
 
     // dst[0], dst[8*stride]: length-2 dot product on EEE.
     dst[0 * dstStride] = static_cast<int16_t>(
@@ -257,23 +303,37 @@ static HWY_INLINE void Dct16Row(const int16_t *src, int16_t *dst, intptr_t dstSt
     dst[12 * dstStride] = static_cast<int16_t>(
         (kT16[12][0] * EEO0 + kT16[12][1] * EEO1 + kAdd) >> Shift);
 
-    // dst[{2,6,10,14}*stride]: length-4 dot products on EO.
+    // dst[{2,6,10,14}*stride]: length-4 dot products on EO. Scalar.
     for (int k = 2; k < 16; k += 4)
     {
-        const int sum = kT16[k][0] * EO0 + kT16[k][1] * EO1
-                      + kT16[k][2] * EO2 + kT16[k][3] * EO3;
+        const int32_t sum = kT16[k][0] * EO[0] + kT16[k][1] * EO[1]
+                          + kT16[k][2] * EO[2] + kT16[k][3] * EO[3];
         dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
     }
 
     // dst[odd*stride]: length-8 dot products on O.
+#if HWY_TARGET != HWY_SCALAR
+    // O_03 and O_47 are already loaded as int32 vectors. For each odd k,
+    // load the first 8 coefficients of kT16[k] (4+4), promote to int32,
+    // multiply, add, reduce.
     for (int k = 1; k < 16; k += 2)
     {
-        const int sum = kT16[k][0] * O[0] + kT16[k][1] * O[1]
-                      + kT16[k][2] * O[2] + kT16[k][3] * O[3]
-                      + kT16[k][4] * O[4] + kT16[k][5] * O[5]
-                      + kT16[k][6] * O[6] + kT16[k][7] * O[7];
+        const auto c_03 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT16[k][0]));
+        const auto c_47 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT16[k][4]));
+        const auto prod = hn::Add(hn::Mul(O_03, c_03), hn::Mul(O_47, c_47));
+        const int32_t sum = hn::ReduceSum(d32, prod);
         dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
     }
+#else
+    for (int k = 1; k < 16; k += 2)
+    {
+        const int32_t sum = kT16[k][0] * O_arr_scalar[0] + kT16[k][1] * O_arr_scalar[1]
+                          + kT16[k][2] * O_arr_scalar[2] + kT16[k][3] * O_arr_scalar[3]
+                          + kT16[k][4] * O_arr_scalar[4] + kT16[k][5] * O_arr_scalar[5]
+                          + kT16[k][6] * O_arr_scalar[6] + kT16[k][7] * O_arr_scalar[7];
+        dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
+    }
+#endif
 }
 
 // Template on Shift1 (bit-depth-dependent). Shift2 is fixed at 10 for Dct16.
@@ -294,46 +354,101 @@ void Dct16Impl_bd10(const int16_t *s, int16_t *d, intptr_t st) { Dct16ImplT<5>(s
 void Dct16Impl_bd12(const int16_t *s, int16_t *d, intptr_t st) { Dct16ImplT<7>(s, d, st); }
 
 // One row of a 32x32 DCT. Factored butterfly mirroring partialButterfly32.
-// All butterfly arithmetic runs in int32: pass-2 inputs (pass-1 coefficients)
-// can exceed int16 range when summed/differenced.
+// Butterfly runs on 4-lane int32 vectors. Length-16 dot products on O
+// run as four vector Mul + three Add + ReduceSum each. Length-8 dot
+// products on EO run as two vector Mul + Add + ReduceSum. Shorter
+// products (length-2 on EEEE/EEEO, length-4 on EEO) stay scalar.
 template <int Shift>
 static HWY_INLINE void Dct32Row(const int16_t *src, int16_t *dst, intptr_t dstStride)
 {
     constexpr int32_t kAdd = 1 << (Shift - 1);
 
-    // E[k] = src[k] + src[31-k], O[k] = src[k] - src[31-k] for k = 0..15.
-    int E[16];
-    int O[16];
+#if HWY_TARGET != HWY_SCALAR
+    const hn::CappedTag<int32_t, 4> d32;
+    const hn::Rebind<int16_t, decltype(d32)> d16_half;  // 4-lane int16
+
+    // Load src[0..31] as eight 4-lane int32 vectors.
+    const auto s0 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 0));
+    const auto s1 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 4));
+    const auto s2 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 8));
+    const auto s3 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 12));
+    const auto s4 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 16));
+    const auto s5 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 20));
+    const auto s6 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 24));
+    const auto s7 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 28));
+
+    // Stage 1: E[0..15] = src[0..15] + src[31..16],
+    //          O[0..15] = src[0..15] - src[31..16].
+    //   E[0..3]   <- s0 + Reverse(s7)
+    //   E[4..7]   <- s1 + Reverse(s6)
+    //   E[8..11]  <- s2 + Reverse(s5)
+    //   E[12..15] <- s3 + Reverse(s4)
+    const auto s7r = hn::Reverse(d32, s7);
+    const auto s6r = hn::Reverse(d32, s6);
+    const auto s5r = hn::Reverse(d32, s5);
+    const auto s4r = hn::Reverse(d32, s4);
+
+    const auto E_03   = hn::Add(s0, s7r);
+    const auto E_47   = hn::Add(s1, s6r);
+    const auto E_811  = hn::Add(s2, s5r);
+    const auto E_1215 = hn::Add(s3, s4r);
+    const auto O_a    = hn::Sub(s0, s7r);  // O[0..3]
+    const auto O_b    = hn::Sub(s1, s6r);  // O[4..7]
+    const auto O_c    = hn::Sub(s2, s5r);  // O[8..11]
+    const auto O_d    = hn::Sub(s3, s4r);  // O[12..15]
+
+    // Stage 2: EE[k] = E[k] + E[15-k], EO[k] = E[k] - E[15-k] for k=0..7.
+    //   EE[0..3] <- E_03   + Reverse(E_1215)
+    //   EE[4..7] <- E_47   + Reverse(E_811)
+    const auto E_1215r = hn::Reverse(d32, E_1215);
+    const auto E_811r  = hn::Reverse(d32, E_811);
+
+    const auto EE_03 = hn::Add(E_03, E_1215r);  // EE[0..3]
+    const auto EE_47 = hn::Add(E_47, E_811r);   // EE[4..7]
+    const auto EO_03 = hn::Sub(E_03, E_1215r);  // EO[0..3]
+    const auto EO_47 = hn::Sub(E_47, E_811r);   // EO[4..7]
+
+    // Stage 3: EEE[k] = EE[k] + EE[7-k], EEO[k] = EE[k] - EE[7-k] for k=0..3.
+    const auto EE_47r = hn::Reverse(d32, EE_47);
+    const auto EEEv = hn::Add(EE_03, EE_47r);   // EEE[0..3]
+    const auto EEOv = hn::Sub(EE_03, EE_47r);   // EEO[0..3]
+
+    alignas(16) int32_t EEE[4];
+    alignas(16) int32_t EEO[4];
+    alignas(16) int32_t EO[8];
+    hn::StoreU(EEEv, d32, EEE);
+    hn::StoreU(EEOv, d32, EEO);
+    hn::StoreU(EO_03, d32, EO);
+    hn::StoreU(EO_47, d32, EO + 4);
+#else
+    int32_t E[16];
+    int32_t O_scalar[16];
     for (int k = 0; k < 16; ++k)
     {
         E[k] = src[k] + src[31 - k];
-        O[k] = src[k] - src[31 - k];
+        O_scalar[k] = src[k] - src[31 - k];
     }
-
-    // EE[k] = E[k] + E[15-k], EO[k] = E[k] - E[15-k] for k = 0..7.
-    int EE[8];
-    int EO[8];
+    int32_t EE[8];
+    int32_t EO[8];
     for (int k = 0; k < 8; ++k)
     {
         EE[k] = E[k] + E[15 - k];
         EO[k] = E[k] - E[15 - k];
     }
+    int32_t EEE[4];
+    int32_t EEO[4];
+    for (int k = 0; k < 4; ++k)
+    {
+        EEE[k] = EE[k] + EE[7 - k];
+        EEO[k] = EE[k] - EE[7 - k];
+    }
+#endif
 
-    // EEE[k] = EE[k] + EE[7-k], EEO[k] = EE[k] - EE[7-k] for k = 0..3.
-    const int EEE0 = EE[0] + EE[7];
-    const int EEE1 = EE[1] + EE[6];
-    const int EEE2 = EE[2] + EE[5];
-    const int EEE3 = EE[3] + EE[4];
-    const int EEO0 = EE[0] - EE[7];
-    const int EEO1 = EE[1] - EE[6];
-    const int EEO2 = EE[2] - EE[5];
-    const int EEO3 = EE[3] - EE[4];
-
-    // EEEE / EEEO — length-2 each.
-    const int EEEE0 = EEE0 + EEE3;
-    const int EEEE1 = EEE1 + EEE2;
-    const int EEEO0 = EEE0 - EEE3;
-    const int EEEO1 = EEE1 - EEE2;
+    // Stage 4: EEEE / EEEO — length-2 each, scalar.
+    const int32_t EEEE0 = EEE[0] + EEE[3];
+    const int32_t EEEE1 = EEE[1] + EEE[2];
+    const int32_t EEEO0 = EEE[0] - EEE[3];
+    const int32_t EEEO1 = EEE[1] - EEE[2];
 
     // dst[0], dst[16*stride]: length-2 dot product on EEEE.
     dst[0 * dstStride] = static_cast<int16_t>(
@@ -347,37 +462,62 @@ static HWY_INLINE void Dct32Row(const int16_t *src, int16_t *dst, intptr_t dstSt
     dst[24 * dstStride] = static_cast<int16_t>(
         (kT32[24][0] * EEEO0 + kT32[24][1] * EEEO1 + kAdd) >> Shift);
 
-    // dst[{4,12,20,28}*stride]: length-4 dot products on EEO.
+    // dst[{4,12,20,28}*stride]: length-4 dot products on EEO. Scalar.
     for (int k = 4; k < 32; k += 8)
     {
-        const int sum = kT32[k][0] * EEO0 + kT32[k][1] * EEO1
-                      + kT32[k][2] * EEO2 + kT32[k][3] * EEO3;
+        const int32_t sum = kT32[k][0] * EEO[0] + kT32[k][1] * EEO[1]
+                          + kT32[k][2] * EEO[2] + kT32[k][3] * EEO[3];
         dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
     }
 
+#if HWY_TARGET != HWY_SCALAR
     // dst[{2,6,10,14,18,22,26,30}*stride]: length-8 dot products on EO.
+    // Vectorize via two Mul + Add + ReduceSum per output.
     for (int k = 2; k < 32; k += 4)
     {
-        const int sum = kT32[k][0] * EO[0] + kT32[k][1] * EO[1]
-                      + kT32[k][2] * EO[2] + kT32[k][3] * EO[3]
-                      + kT32[k][4] * EO[4] + kT32[k][5] * EO[5]
-                      + kT32[k][6] * EO[6] + kT32[k][7] * EO[7];
+        const auto c_03 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][0]));
+        const auto c_47 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][4]));
+        const auto prod = hn::Add(hn::Mul(EO_03, c_03), hn::Mul(EO_47, c_47));
+        const int32_t sum = hn::ReduceSum(d32, prod);
         dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
     }
 
-    // dst[odd*stride]: length-16 dot products on O.
+    // dst[odd*stride]: length-16 dot products on O. Four Mul + three Add + ReduceSum.
     for (int k = 1; k < 32; k += 2)
     {
-        const int sum = kT32[k][0] * O[0]   + kT32[k][1] * O[1]
-                      + kT32[k][2] * O[2]   + kT32[k][3] * O[3]
-                      + kT32[k][4] * O[4]   + kT32[k][5] * O[5]
-                      + kT32[k][6] * O[6]   + kT32[k][7] * O[7]
-                      + kT32[k][8] * O[8]   + kT32[k][9] * O[9]
-                      + kT32[k][10] * O[10] + kT32[k][11] * O[11]
-                      + kT32[k][12] * O[12] + kT32[k][13] * O[13]
-                      + kT32[k][14] * O[14] + kT32[k][15] * O[15];
+        const auto c_a = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][0]));
+        const auto c_b = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][4]));
+        const auto c_c = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][8]));
+        const auto c_d = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][12]));
+
+        const auto p_ab = hn::Add(hn::Mul(O_a, c_a), hn::Mul(O_b, c_b));
+        const auto p_cd = hn::Add(hn::Mul(O_c, c_c), hn::Mul(O_d, c_d));
+        const int32_t sum = hn::ReduceSum(d32, hn::Add(p_ab, p_cd));
         dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
     }
+#else
+    // SCALAR fallback for length-8 and length-16 dot products.
+    for (int k = 2; k < 32; k += 4)
+    {
+        const int32_t sum = kT32[k][0] * EO[0] + kT32[k][1] * EO[1]
+                          + kT32[k][2] * EO[2] + kT32[k][3] * EO[3]
+                          + kT32[k][4] * EO[4] + kT32[k][5] * EO[5]
+                          + kT32[k][6] * EO[6] + kT32[k][7] * EO[7];
+        dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
+    }
+    for (int k = 1; k < 32; k += 2)
+    {
+        const int32_t sum = kT32[k][0]  * O_scalar[0]  + kT32[k][1]  * O_scalar[1]
+                          + kT32[k][2]  * O_scalar[2]  + kT32[k][3]  * O_scalar[3]
+                          + kT32[k][4]  * O_scalar[4]  + kT32[k][5]  * O_scalar[5]
+                          + kT32[k][6]  * O_scalar[6]  + kT32[k][7]  * O_scalar[7]
+                          + kT32[k][8]  * O_scalar[8]  + kT32[k][9]  * O_scalar[9]
+                          + kT32[k][10] * O_scalar[10] + kT32[k][11] * O_scalar[11]
+                          + kT32[k][12] * O_scalar[12] + kT32[k][13] * O_scalar[13]
+                          + kT32[k][14] * O_scalar[14] + kT32[k][15] * O_scalar[15];
+        dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
+    }
+#endif
 }
 
 // Template on Shift1 (bit-depth-dependent). Shift2 is fixed at 11 for Dct32.
