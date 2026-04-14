@@ -28,13 +28,11 @@ namespace vca {
 double performEntropy(const unsigned blockSize,
                       const unsigned bitDepth,
                       const int16_t *pixelBuffer,
-                      CpuSimd cpuSimd,
                       bool enableLowpass);
 
 double performEdgeDensity(const unsigned blockSize,
                           const unsigned bitDepth,
                           const int16_t *pixelBuffer,
-                          CpuSimd cpuSimd,
                           bool enableLowpass);
 
 } // namespace vca

@@ -198,7 +198,6 @@ std::optional<CLIOptions> parseCLIOptions(int argc, char **argv)
         if (name == "no-simd")
         {
             options.vcaParam.enableSIMD = false;
-            options.vcaParam.cpuSimd    = CpuSimd::None;
         }
         else if (name == "no-energy-chroma")
             options.vcaParam.enableEnergyChroma = false;

@@ -29,7 +29,6 @@ namespace vca {
 double performEntropy(const unsigned blockSize,
                       const unsigned bitDepth,
                       const int16_t *pixelBuffer,
-                      CpuSimd cpuSimd,
                       bool enableLowpass)
 {
     std::vector<int16_t> block(blockSize * blockSize);
@@ -55,7 +54,6 @@ double performEntropy(const unsigned blockSize,
 double performEdgeDensity(const unsigned blockSize,
                           const unsigned bitDepth,
                           const int16_t *pixelBuffer,
-                          CpuSimd cpuSimd,
                           bool enableLowpass)
 {
     // Calculate the total number of pixels in the block

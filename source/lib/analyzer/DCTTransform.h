@@ -33,7 +33,6 @@ void performDCT(const unsigned blockSize,
                 const unsigned bitDepth,
                 int16_t *pixelBuffer,
                 int16_t *coeffBuffer,
-                CpuSimd cpuSimd,
                 bool enableLowpassDCT);
 
 } // namespace vca

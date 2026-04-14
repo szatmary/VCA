@@ -20,7 +20,7 @@
 #include <analyzer/Analyzer.h>
 #include <analyzer/EnergyCalculation.h>
 #include <analyzer/EntropyCalculation.h>
-#include <analyzer/simd/cpu.h>
+#include <analyzer/simd/targets.h>
 
 #include <cstring>
 #include <map>
@@ -48,30 +48,11 @@ Analyzer::Analyzer(vca_param cfg)
         throw std::invalid_argument("Invalid bit depth");
     }
 
-#if defined (VCA_DISABLE_SIMD) && VCA_DISABLE_SIMD // Build-time scalar-only: force None, ignore user request
-     this->cfg.cpuSimd = CpuSimd::None;
-     log(cfg, LogLevel::Info, "SIMD is disabled at build time. Using scalar implementations.");
-#else
-    if (this->cfg.cpuSimd == CpuSimd::Autodetect)
-    {
-        this->cfg.cpuSimd = cpuDetectMaxSimd();
-        log(cfg, LogLevel::Info,
-             "Autodetected SIMD: " + std::string(CpuSimdMapper.getName(this->cfg.cpuSimd)));
-    }
-    else if (this->cfg.cpuSimd != CpuSimd::None)
-    {
-        if (!isSimdSupported(this->cfg.cpuSimd))
-        {
-            const auto requested = std::string(CpuSimdMapper.getName(this->cfg.cpuSimd));
-            this->cfg.cpuSimd    = cpuDetectMaxSimd();
-            log(cfg, LogLevel::Warning,
-                "The selected SIMD '" + requested + "' is not available on this CPU. " +
-                "Lowering to '" + std::string(CpuSimdMapper.getName(this->cfg.cpuSimd)) +
-                "'.");
-        }
-    }
-#endif
-    log(cfg, LogLevel::Info, "Using SIMD " + CpuSimdMapper.getName(this->cfg.cpuSimd));
+    // SIMD target selection is handled by Highway at runtime.
+    // The legacy vca_param::cpuSimd field is retained for ABI but ignored;
+    // the --asm CLI flag constrains Highway's target mask via
+    // vca::simd::ConstrainTargetsForCli() before the analyzer is created.
+    log(cfg, LogLevel::Info, "Using SIMD target: " + vca::simd::CurrentTargetName());
 
     if (cfg.nrFrameThreads == 0)
     {

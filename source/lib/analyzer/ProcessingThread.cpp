@@ -59,7 +59,6 @@ void ProcessingThread::threadFunction(MultiThreadQueue<Job> &jobQueue,
             computeWeightedDCTEnergy(*job,
                                      result,
                                      this->cfg.blockSize,
-                                     this->cfg.cpuSimd,
                                      this->cfg.enableEnergyChroma,
                                      this->cfg.enableLowpass);
         }
@@ -68,7 +67,6 @@ void ProcessingThread::threadFunction(MultiThreadQueue<Job> &jobQueue,
             computeEntropy(*job,
                            result,
                            this->cfg.blockSize,
-                           this->cfg.cpuSimd,
                            this->cfg.enableLowpass,
                            this->cfg.enableEntropyChroma);
         }
@@ -77,7 +75,6 @@ void ProcessingThread::threadFunction(MultiThreadQueue<Job> &jobQueue,
             computeEdgeDensity(*job,
                                result,
                                this->cfg.blockSize,
-                               this->cfg.cpuSimd,
                                this->cfg.enableLowpass);
         }
         log(this->cfg,

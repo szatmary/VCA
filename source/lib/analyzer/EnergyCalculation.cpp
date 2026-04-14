@@ -285,7 +285,6 @@ namespace vca {
 void computeWeightedDCTEnergy(const Job &job,
                               Result &result,
                               const unsigned blockSize,
-                              CpuSimd cpuSimd,
                               bool enableChroma,
                               bool enableLowpass)
 {
@@ -342,7 +341,6 @@ void computeWeightedDCTEnergy(const Job &job,
                        bitDepth,
                        pixelBuffer,
                        coeffBuffer,
-                       cpuSimd,
                        enableLowpass);
 
             result.brightnessPerBlock[blockIndex] = uint32_t(sqrt(coeffBuffer[0]));
@@ -412,7 +410,6 @@ void computeWeightedDCTEnergy(const Job &job,
                            bitDepth,
                            pixelBufferC,
                            coeffBufferC,
-                           cpuSimd,
                            enableLowpass);
 
                 result.averageUPerBlock[blockIndexC] = uint32_t(sqrt(coeffBufferC[0]));
@@ -450,7 +447,6 @@ void computeWeightedDCTEnergy(const Job &job,
                            bitDepth,
                            pixelBufferC,
                            coeffBufferC,
-                           cpuSimd,
                            enableLowpass);
 
                 result.averageVPerBlock[blockIndexC] = uint32_t(sqrt(coeffBufferC[0]));
@@ -471,7 +467,6 @@ void computeWeightedDCTEnergy(const Job &job,
 void computeEdgeDensity(const Job &job,
                         Result &result,
                         const unsigned blockSize,
-                        CpuSimd cpuSimd,
                         bool enableLowpass)
 {
     const auto frame = job.frame;
@@ -522,7 +517,6 @@ void computeEdgeDensity(const Job &job,
             result.edgeDensityPerBlock[blockIndex] = performEdgeDensity(blockSize,
                                                                         bitDepth,
                                                                         pixelBuffer,
-                                                                        cpuSimd,
                                                                         enableLowpass);
             frameEdgeDensity += result.edgeDensityPerBlock[blockIndex];
             blockIndex++;
@@ -536,7 +530,6 @@ void computeEdgeDensity(const Job &job,
 void computeEntropy(const Job &job,
                     Result &result,
                     const unsigned blockSize,
-                    CpuSimd cpuSimd,
                     bool enableLowpass,
                     bool enableChroma)
 {
@@ -588,7 +581,6 @@ void computeEntropy(const Job &job,
             result.entropyPerBlock[blockIndex] = performEntropy(blockSize,
                                                                 bitDepth,
                                                                 pixelBuffer,
-                                                                cpuSimd,
                                                                 enableLowpass);
             frameEntropy += result.entropyPerBlock[blockIndex];
             blockIndex++;
@@ -643,7 +635,6 @@ void computeEntropy(const Job &job,
                 result.entropyUPerBlock[blockIndexC] = performEntropy(blockSize,
                                                                       bitDepth,
                                                                       pixelBufferC,
-                                                                      cpuSimd,
                                                                       enableLowpass);
 
                 frameEntropyU += result.entropyUPerBlock[blockIndexC];
@@ -674,7 +665,6 @@ void computeEntropy(const Job &job,
                 result.entropyVPerBlock[blockIndexC] = performEntropy(blockSize,
                                                                       bitDepth,
                                                                       pixelBufferC,
-                                                                      cpuSimd,
                                                                       enableLowpass);
 
                 frameEntropyV += result.entropyVPerBlock[blockIndexC];

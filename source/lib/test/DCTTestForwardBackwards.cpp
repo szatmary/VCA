@@ -20,7 +20,6 @@
 
 #include <analyzer/DCTTransform.h>
 #include <analyzer/common/common.h>
-#include <analyzer/simd/cpu.h>
 #include <test/InverseDCTNative.h>
 #include <test/common/functions.h>
 
@@ -70,7 +69,7 @@ using BlockSize = unsigned;
 using BitDepth  = unsigned;
 using MSE       = double;
 using MaxDiff   = int;
-using TestCase  = std::tuple<BlockSize, BitDepth, CpuSimd>;
+using TestCase  = std::tuple<BlockSize, BitDepth>;
 
 class DCTTestForwardBackwardsFixture : public testing::TestWithParam<TestCase>
 {
@@ -79,9 +78,7 @@ public:
     {
         const auto blockSize = std::get<0>(info.param);
         const auto bitDepth  = std::get<1>(info.param);
-        const auto cpuSimd   = std::get<2>(info.param);
-        return "BlockSize" + std::to_string(blockSize) + "_BitDpeht" + std::to_string(bitDepth)
-               + "_" + vca::CpuSimdMapper.getName(cpuSimd);
+        return "BlockSize" + std::to_string(blockSize) + "_BitDpeht" + std::to_string(bitDepth);
     }
 };
 
@@ -91,12 +88,7 @@ TEST_P(DCTTestForwardBackwardsFixture, TransformTest)
 
     const auto blockSize        = std::get<0>(param);
     const auto bitDepth         = std::get<1>(param);
-    const auto cpuSimd          = std::get<2>(param);
     const auto enableLowpassDCT = false;
-
-    if (!vca::isSimdSupported(cpuSimd))
-        GTEST_SKIP() << "Skipping testing of " << vca::CpuSimdMapper.getName(cpuSimd)
-                     << " because it is not supported on this platform.";
 
     ALIGN_VAR_32(int16_t, pixelBuffer[MAX_BLOCKSIZE_SAMPLES]);
     ALIGN_VAR_32(int16_t, coeffBuffer[MAX_BLOCKSIZE_SAMPLES]);
@@ -109,7 +101,7 @@ TEST_P(DCTTestForwardBackwardsFixture, TransformTest)
     test::fillBlockWithRandomData(pixelBuffer, blockSize, bitDepth);
     assertUnusedValuesAreZero(pixelBuffer, blockSize);
 
-    vca::performDCT(blockSize, bitDepth, pixelBuffer, coeffBuffer, cpuSimd, enableLowpassDCT);
+    vca::performDCT(blockSize, bitDepth, pixelBuffer, coeffBuffer, enableLowpassDCT);
     assertUnusedValuesAreZero(coeffBuffer, blockSize);
     assertUsedValuesContainNonZeroValues(coeffBuffer, blockSize);
 
@@ -143,11 +135,8 @@ TEST_P(DCTTestForwardBackwardsFixture, TransformTest)
 INSTANTIATE_TEST_SUITE_P(
     DCRTransformTest,
     DCTTestForwardBackwardsFixture,
-    testing::Combine(
-        testing::ValuesIn({BlockSize(8u), BlockSize(16u), BlockSize(32u)}),
-        testing::ValuesIn({BitDepth(8u), BitDepth(10u), BitDepth(12u)}),
-        testing::ValuesIn(
-            {CpuSimd::None, CpuSimd::SSE2, CpuSimd::SSSE3, CpuSimd::SSE4, CpuSimd::AVX2})),
+    testing::Combine(testing::ValuesIn({BlockSize(8u), BlockSize(16u), BlockSize(32u)}),
+                     testing::ValuesIn({BitDepth(8u), BitDepth(10u), BitDepth(12u)})),
     &DCTTestForwardBackwardsFixture::generateName);
 
 // This code was used to get the results table above.

@@ -21,7 +21,6 @@
 #include <analyzer/DCTTransform.h>
 #include <analyzer/DCTTransformsNative.h>
 #include <analyzer/common/common.h>
-#include <analyzer/simd/cpu.h>
 #include <analyzer/simd/dct_hwy.h>
 #include <test/common/functions.h>
 
@@ -32,13 +31,6 @@ namespace {
 
 constexpr auto MAX_BLOCKSIZE_SAMPLES = 32 * 32;
 constexpr auto MAX_BLOCKSIZE_BYTES   = MAX_BLOCKSIZE_SAMPLES * 2;
-
-void assertUsedValuesAreIdentical(int16_t *data1, int16_t *data2, const unsigned blockSize)
-{
-    const auto nrUsedPixels = blockSize * blockSize;
-    for (unsigned i = 0; i < nrUsedPixels; i++)
-        ASSERT_EQ(data1[i], data2[i]);
-}
 
 void fillRandomBlock(int16_t *block, unsigned size, unsigned bitDepth, uint32_t seed)
 {
@@ -76,33 +68,27 @@ TEST_P(DCTTestImplementationsIdenticalOutputFixture,
     const auto enableLowpassDCT = false;
 
     ALIGN_VAR_32(int16_t, pixelBuffer[MAX_BLOCKSIZE_SAMPLES]);
-    ALIGN_VAR_32(int16_t, coeffBufferNative[MAX_BLOCKSIZE_SAMPLES]);
-    ALIGN_VAR_32(int16_t, coeffBufferTest[MAX_BLOCKSIZE_SAMPLES]);
+    ALIGN_VAR_32(int16_t, coeffBuffer[MAX_BLOCKSIZE_SAMPLES]);
 
     std::memset(pixelBuffer, 0, MAX_BLOCKSIZE_BYTES);
-    std::memset(coeffBufferNative, 0, MAX_BLOCKSIZE_BYTES);
-    std::memset(coeffBufferTest, 0, MAX_BLOCKSIZE_BYTES);
+    std::memset(coeffBuffer, 0, MAX_BLOCKSIZE_BYTES);
 
     test::fillBlockWithRandomData(pixelBuffer, blockSize, bitDepth);
-    vca::performDCT(blockSize,
-                    bitDepth,
-                    pixelBuffer,
-                    coeffBufferNative,
-                    CpuSimd::None,
-                    enableLowpassDCT);
+    vca::performDCT(blockSize, bitDepth, pixelBuffer, coeffBuffer, enableLowpassDCT);
 
-    for (const auto cpuSimd : {CpuSimd::SSE2, CpuSimd::SSSE3, CpuSimd::SSE4, CpuSimd::AVX2})
+    // Smoke check: ensure the Highway-dispatched performDCT produced non-zero
+    // coefficients. Cross-validation against the scalar reference is handled
+    // by the DCTHighwayCrossCheck cases below.
+    bool anyNonZero = false;
+    for (unsigned i = 0; i < blockSize * blockSize; ++i)
     {
-        if (!vca::isSimdSupported(cpuSimd))
+        if (coeffBuffer[i] != 0)
         {
-            std::cout << "Skipping testing of " << vca::CpuSimdMapper.getName(cpuSimd)
-                      << " because it is not supported on this platform.";
-            continue;
+            anyNonZero = true;
+            break;
         }
-
-        vca::performDCT(blockSize, bitDepth, pixelBuffer, coeffBufferTest, cpuSimd, enableLowpassDCT);
-        assertUsedValuesAreIdentical(coeffBufferNative, coeffBufferTest, blockSize);
     }
+    ASSERT_TRUE(anyNonZero);
 }
 
 INSTANTIATE_TEST_SUITE_P(

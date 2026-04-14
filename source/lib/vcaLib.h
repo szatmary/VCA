@@ -49,7 +49,11 @@ enum class LogLevel
     Debug
 };
 
-enum class CpuSimd
+enum class [[deprecated(
+    "CpuSimd is ignored as of the Highway SIMD port; Highway selects the "
+    "runtime target automatically. This enum will be removed in a future "
+    "version.")]]
+CpuSimd
 {
     Autodetect,
     None,
@@ -173,7 +177,17 @@ struct vca_param
     unsigned nrFrameThreads{0};
     unsigned nrSliceThreads{0};
 
+    // DEPRECATED: ignored since the Highway SIMD port. Highway selects the
+    // runtime SIMD target automatically. Field retained for ABI compatibility;
+    // will be removed in a future major version.
+#if defined(__GNUC__) || defined(__clang__)
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     CpuSimd cpuSimd{CpuSimd::Autodetect};
+#if defined(__GNUC__) || defined(__clang__)
+#    pragma GCC diagnostic pop
+#endif
 
     void (*logFunction)(void *, LogLevel, const char *){};
     void *logFunctionPrivateData{};

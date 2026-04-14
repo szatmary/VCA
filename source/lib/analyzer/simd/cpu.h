@@ -62,9 +62,21 @@ extern "C" void vca_cpu_emms(void); // provided by primitives/asm when NASM is e
 
 namespace vca {
 
+// NOTE: CpuSimd is deprecated as of the Highway SIMD port. These helpers
+// are retained only until Task 11 deletes this file; suppress the
+// deprecation warning at the declaration site.
+#if defined(__GNUC__) || defined(__clang__)
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 CpuSimd cpuDetectMaxSimd();
 
 bool isSimdSupported(CpuSimd simd);
+
+#if defined(__GNUC__) || defined(__clang__)
+#    pragma GCC diagnostic pop
+#endif
 
 struct cpu_name_t
 {

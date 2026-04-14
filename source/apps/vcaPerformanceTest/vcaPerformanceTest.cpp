@@ -411,24 +411,17 @@ int main(int argc, char **argv)
                 + vca_colorSpaceMapper.getName(frameInfo.colorspace) + " "
                 + std::to_string(frameInfo.bitDepth) + "bit)");
 
-    const std::map<CpuSimd, std::string> cpuSimdNames = {{CpuSimd::None, "None"},
-                                                         {CpuSimd::SSE2, "SSE2"},
-                                                         {CpuSimd::SSSE3, "SSSE3"},
-                                                         {CpuSimd::SSE4, "SSE4"},
-                                                         {CpuSimd::AVX2, "AVX2"}};
-
-    for (auto &simd : cpuSimdNames)
+    // SIMD target selection is now handled by Highway at runtime; iterate
+    // only over block sizes. Use the --asm CLI flag on the vca binary to
+    // constrain the target mask if needed.
+    for (unsigned blocksize : {8, 16, 32})
     {
-        for (unsigned blocksize : {8, 16, 32})
-        {
-            std::cout << "  [Run test 0 - " << simd.second << " - " << blocksize << "x" << blocksize
-                      << " " << options.vcaParam.frameInfo.bitDepth << "bit]\n";
-            options.vcaParam.cpuSimd   = simd.first;
-            options.vcaParam.blockSize = blocksize;
+        std::cout << "  [Run test 0 - " << blocksize << "x" << blocksize << " "
+                  << options.vcaParam.frameInfo.bitDepth << "bit]\n";
+        options.vcaParam.blockSize = blocksize;
 
-            runTest(options, pushFrames);
-            std::cout << "\n";
-        }
+        runTest(options, pushFrames);
+        std::cout << "\n";
     }
 
     return 0;

@@ -35,32 +35,28 @@ namespace vca {
 
 void performDCTBlockSize32(const unsigned bitDepth,
                            int16_t *pixelBuffer,
-                           int16_t *coeffBuffer,
-                           CpuSimd /*cpuSimd*/)
+                           int16_t *coeffBuffer)
 {
     vca::Dct32(pixelBuffer, coeffBuffer, 32, bitDepth);
 }
 
 void performDCTBlockSize16(const unsigned bitDepth,
                            int16_t *pixelBuffer,
-                           int16_t *coeffBuffer,
-                           CpuSimd /*cpuSimd*/)
+                           int16_t *coeffBuffer)
 {
     vca::Dct16(pixelBuffer, coeffBuffer, 16, bitDepth);
 }
 
 void performDCTBlockSize8(const unsigned bitDepth,
                           int16_t *pixelBuffer,
-                          int16_t *coeffBuffer,
-                          CpuSimd /*cpuSimd*/)
+                          int16_t *coeffBuffer)
 {
     vca::Dct8(pixelBuffer, coeffBuffer, 8, bitDepth);
 }
 
 void performLowpassDCTBlockSize16(const unsigned bitDepth,
                                   const int16_t *src,
-                                  int16_t *dst,
-                                  CpuSimd /*cpuSimd*/)
+                                  int16_t *dst)
 {
     ALIGN_VAR_32(int16_t, coef[8 * 8]);
     ALIGN_VAR_32(int16_t, avgBlock[8 * 8]);
@@ -89,8 +85,7 @@ void performLowpassDCTBlockSize16(const unsigned bitDepth,
 
 void performLowpassDCTBlockSize32(const unsigned bitDepth,
                                   const int16_t *src,
-                                  int16_t *dst,
-                                  CpuSimd /*cpuSimd*/)
+                                  int16_t *dst)
 {
     ALIGN_VAR_32(int16_t, coef[16 * 16]);
     ALIGN_VAR_32(int16_t, avgBlock[16 * 16]);
@@ -118,7 +113,6 @@ void performDCT(const unsigned blockSize,
                 const unsigned bitDepth,
                 int16_t *pixelBuffer,
                 int16_t *coeffBuffer,
-                CpuSimd cpuSimd,
                 bool enableLowpassDCT)
 {
     if (bitDepth != 8 && bitDepth != 10 && bitDepth != 12)
@@ -128,18 +122,18 @@ void performDCT(const unsigned blockSize,
     {
         case 32:
             if (enableLowpassDCT)
-                performLowpassDCTBlockSize32(bitDepth, pixelBuffer, coeffBuffer, cpuSimd);
+                performLowpassDCTBlockSize32(bitDepth, pixelBuffer, coeffBuffer);
             else
-                performDCTBlockSize32(bitDepth, pixelBuffer, coeffBuffer, cpuSimd);
+                performDCTBlockSize32(bitDepth, pixelBuffer, coeffBuffer);
             break;
         case 16:
             if (enableLowpassDCT)
-                performLowpassDCTBlockSize16(bitDepth, pixelBuffer, coeffBuffer, cpuSimd);
+                performLowpassDCTBlockSize16(bitDepth, pixelBuffer, coeffBuffer);
             else
-                performDCTBlockSize16(bitDepth, pixelBuffer, coeffBuffer, cpuSimd);
+                performDCTBlockSize16(bitDepth, pixelBuffer, coeffBuffer);
             break;
         case 8:
-            performDCTBlockSize8(bitDepth, pixelBuffer, coeffBuffer, cpuSimd);
+            performDCTBlockSize8(bitDepth, pixelBuffer, coeffBuffer);
             break;
         default:
             throw std::invalid_argument("Invalid block size " + std::to_string(blockSize));

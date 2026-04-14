@@ -24,6 +24,13 @@
 
 #include <analyzer/common/common.h>
 
+// CpuSimd is deprecated as of the Highway SIMD port. This whole file is
+// scheduled for deletion in Task 11; suppress deprecation warnings for
+// its remaining references to CpuSimd / CpuSimdMapper.
+#if defined(__GNUC__) || defined(__clang__)
+#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #if MACOS || SYS_FREEBSD
 #include <sys/sysctl.h>
 #include <sys/types.h>
