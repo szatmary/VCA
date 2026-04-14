@@ -25,6 +25,7 @@ add_library(vcaInternal STATIC
     simd/cpu.h
     simd/cpu.cpp
     simd/dct8.h
+    simd/dct_hwy.cpp
     simd/entropy.h
 )
 
