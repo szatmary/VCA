@@ -17,7 +17,7 @@
  # along with this program.
  #****************************************************************************/
 
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.14)
 
 # Prefer Release for single-config generators; harmless for multi-config (MSVC)
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
@@ -48,6 +48,9 @@ option(ENABLE_PERFORMANCE_TEST     "Enable Performance Test" OFF)
 
 # FetchContent settings (silence CMP0135 warning from gtest etc.)
 set(FETCHCONTENT_DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+
+# Fetch Google Highway (private SIMD dependency of analyzer library)
+include(FetchHighway)
 
 # Subdirectories
 add_subdirectory(source/lib)
