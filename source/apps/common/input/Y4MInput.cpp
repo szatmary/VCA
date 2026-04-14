@@ -29,6 +29,7 @@ namespace filesystem = std::filesystem;
 #endif
 
 #include <iterator>
+#include <stdexcept>
 #include <string>
 namespace vca {
 Y4MInput::Y4MInput(std::string &fileName)

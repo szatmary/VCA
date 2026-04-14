@@ -30,6 +30,7 @@
 #include <analyzer/simd/dct_hwy.h>
 
 #include <cstring>
+#include <stdexcept>
 
 namespace vca {
 

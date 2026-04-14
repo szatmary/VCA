@@ -24,6 +24,7 @@
 
 #include <cstring>
 #include <map>
+#include <stdexcept>
 #include <string>
 
 namespace vca {
