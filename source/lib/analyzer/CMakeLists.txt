@@ -29,76 +29,10 @@ add_library(vcaInternal STATIC
 
 target_include_directories(vcaInternal PRIVATE ${LIB_SOURCE_DIR})
 
-# SIMD / Assembler detection
-
-set(SIMD_ENABLED OFF)
-set(NASM_ENABLED OFF)
-
-if (ENABLE_SIMD)
-  # x86 / x64 NASM path
-  if (DEFINED VCA_ARCH_X86 AND VCA_ARCH_X86)
-    if (ENABLE_NASM)
-      include(CheckLanguage)
-      check_language(ASM_NASM)
-      if (CMAKE_ASM_NASM_COMPILER)
-        enable_language(ASM_NASM)
-        set(NASM_ENABLED ON)
-        set(SIMD_ENABLED ON)
-        message(STATUS "SIMD: NASM found - Enabling x86 assembly (${CMAKE_ASM_NASM_COMPILER})")
-        # Preprocessor define used by cpu.h/cpu.cpp to guard asm externs
-        target_compile_definitions(vcaInternal PRIVATE NASM_ENABLED=1)
-      else()
-        message(WARNING "SIMD: NASM not found - Disabling SIMD on x86")
-      endif()
-    else()
-      message(STATUS "SIMD: NASM explicitly disabled by user (-DENABLE_NASM=OFF)")
-    endif()
-
-  # ARM / NEON path (no assembler needed if intrinsics-only)
-  elseif (DEFINED VCA_ARCH_ARM AND VCA_ARCH_ARM)
-    if (VCA_ARM_INTRINSICS_ONLY)
-      set(SIMD_ENABLED ON)
-      message(STATUS "SIMD: ARM architecture detected - Enabling NEON intrinsics (no assembler required)")
-      # No extra compile definitions needed here
-    else()
-      # If you actually have .S files, require generic ASM
-      include(CheckLanguage)
-      check_language(ASM)
-      if (CMAKE_ASM_COMPILER)
-        enable_language(ASM)
-        set(SIMD_ENABLED ON)
-        message(STATUS "SIMD: ARM assembler detected - Enabling ARM assembly (${CMAKE_ASM_COMPILER})")
-      else()
-        message(WARNING "SIMD: no ARM assembler found - Disabling SIMD on ARM")
-      endif()
-    endif()
-
-  else()
-    message(STATUS "SIMD: Unknown/unsupported arch for SIMD - leaving disabled")
-  endif()
-else()
-  message(STATUS "SIMD: Disabled by user (-DENABLE_SIMD=OFF)")
-endif()
-
-# We can also expose these to grandchildren via cache (optional):
-# set(SIMD_ENABLED ${SIMD_ENABLED} CACHE INTERNAL "SIMD enabled after toolchain detection")
-# set(NASM_ENABLED ${NASM_ENABLED} CACHE INTERNAL "NASM enabled on x86")
-
-# Propagate SIMD-off define to the sources
-if (NOT SIMD_ENABLED)
-  target_compile_definitions(vcaInternal PRIVATE VCA_DISABLE_SIMD=1)
-  message(STATUS "SIMD: Disabled - compiling scalar fallback (VCA_DISABLE_SIMD=1)")
-endif()
-
-# SIMD is Highway-based and compiled directly into vcaInternal.
-# The simd/ subdirectory is a stub (see simd/CMakeLists.txt).
-if (SIMD_ENABLED)
-  add_subdirectory(simd)
-endif()
 target_link_libraries(vcaInternal PRIVATE Threads::Threads)
 
-# Highway (dry link): link privately so subsequent tasks can use Highway
-# types in analyzer sources. Marked SYSTEM so Highway's headers are excluded
-# from VCA's own warning flags.
+# Highway is the sole SIMD backend. Runtime dispatch is handled inside
+# dct_hwy.cpp / targets.cpp via HWY_DYNAMIC_DISPATCH; there is no
+# configure-time arch detection or NASM path anymore.
 target_link_libraries(vcaInternal PRIVATE hwy)
 target_include_directories(vcaInternal SYSTEM PRIVATE ${highway_SOURCE_DIR})

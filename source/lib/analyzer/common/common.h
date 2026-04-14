@@ -18,7 +18,6 @@
 
 #pragma once
 
-#include <analyzer/common/EnumMapper.h>
 #include <vcaLib.h>
 
 #include <mutex>
@@ -32,25 +31,6 @@ namespace vca {
 #define ALIGN_VAR_32(T, var) T var __attribute__((aligned(32)))
 #elif defined(_MSC_VER)
 #define ALIGN_VAR_32(T, var) __declspec(align(32)) T var
-#endif
-
-// CpuSimdMapper is only used internally by the soon-to-be-removed
-// source/lib/analyzer/simd/cpu.cpp (Task 11 deletes it). Wrap its
-// definition in a deprecation-suppression pragma so including common.h
-// does not flood the build with warnings about the deprecated CpuSimd
-// enum.
-#if defined(__GNUC__) || defined(__clang__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-const auto CpuSimdMapper = EnumMapper<CpuSimd>({{CpuSimd::None, "NoSimd"},
-                                                {CpuSimd::SSE2, "SSE2"},
-                                                {CpuSimd::SSSE3, "SSSE3"},
-                                                {CpuSimd::SSE4, "SSE4"},
-                                                {CpuSimd::AVX2, "AVX2"},
-                                                {CpuSimd::NEON, "NEON"}});
-#if defined(__GNUC__) || defined(__clang__)
-#    pragma GCC diagnostic pop
 #endif
 
 inline void log(const vca_param &cfg, LogLevel level, const std::string &message)

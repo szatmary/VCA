@@ -76,105 +76,8 @@ set_source_files_properties(vcaLib.cpp PROPERTIES COMPILE_FLAGS ${VFLAG})
 
 find_package(Threads REQUIRED)
 
-# Architecture detection
-string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" SYSPROC)
-set(X86_ALIASES x86 i386 i686 x86_64 amd64)
-set(ARM_ALIASES armv6l armv7l aarch64 arm64)
-set(POWER_ALIASES ppc64 ppc64le)
-list(FIND X86_ALIASES "${SYSPROC}" X86MATCH)
-list(FIND ARM_ALIASES "${SYSPROC}" ARMMATCH)
-list(FIND POWER_ALIASES "${SYSPROC}" POWERMATCH)
-
-if("${SYSPROC}" STREQUAL "" OR X86MATCH GREATER "-1")
-    add_definitions(-DX86_64=1)
-    add_definitions(-DVCA_ARCH_X86=1)
-    set(VCA_ARCH_X86 1)
-    message(STATUS "Detected x86 target processor")
-elseif(POWERMATCH GREATER "-1")
-    message(STATUS "Detected POWER target processor")
-elseif(ARMMATCH GREATER "-1")
-    message(STATUS "Detected ARM target processor")
-    add_definitions(-DVCA_ARCH_ARM=1)
-    set(VCA_ARCH_ARM 1)
-else()
-    message(STATUS "CMAKE_SYSTEM_PROCESSOR value `${CMAKE_SYSTEM_PROCESSOR}` is unknown")
-    message(STATUS "Please add this value near ${CMAKE_CURRENT_LIST_FILE}:${CMAKE_CURRENT_LIST_LINE}")
-endif()
-
-# SIMD / Assembler availability (parent owns options; we just detect)
-
-include(CheckLanguage)
-
-# Default off until proven available (or intrinsics-only on ARM)
-set(SIMD_ENABLED OFF)
-set(NASM_ENABLED OFF)
-
-if (ENABLE_SIMD)
-    if (VCA_ARCH_X86)
-        # Try NASM -> then YASM -> then MASM (for MSVC)
-        if (ENABLE_NASM)
-            check_language(ASM_NASM)
-            if (CMAKE_ASM_NASM_COMPILER)
-                enable_language(ASM_NASM)
-                set(SIMD_ENABLED ON)
-                set(NASM_ENABLED ON)
-                message(STATUS "SIMD: enabling x86 assembly with NASM (${CMAKE_ASM_NASM_COMPILER})")
-            else()
-                # Optional: fall back to ASM_YASM if your code supports it.
-                check_language(ASM_YASM)
-                if (CMAKE_ASM_YASM_COMPILER)
-                    enable_language(ASM_YASM)
-                    set(SIMD_ENABLED ON)
-                    set(NASM_ENABLED ON) # treat YASM equivalently for downstream guards
-                    message(STATUS "SIMD: enabling x86 assembly with YASM (${CMAKE_ASM_YASM_COMPILER})")
-                elseif (MSVC)
-                    check_language(ASM_MASM)
-                    if (CMAKE_ASM_MASM_COMPILER)
-                        enable_language(ASM_MASM)
-                        set(SIMD_ENABLED ON)
-                        # Use NASM_ENABLED=false to signal different dialect if needed
-                        message(STATUS "SIMD: enabling x86 assembly with MASM (${CMAKE_ASM_MASM_COMPILER})")
-                    else()
-                        message(WARNING "SIMD: no assembler (NASM/YASM/MASM) found on x86 -> disabling SIMD")
-                    endif()
-                else()
-                    message(WARNING "SIMD: no assembler (NASM/YASM) found on x86 -> disabling SIMD")
-                endif()
-            endif()
-        else()
-            message(STATUS "SIMD: NASM explicitly disabled by user (-DENABLE_NASM=OFF)")
-        endif()
-
-    elseif (VCA_ARCH_ARM)
-        if (DEFINED VCA_ARM_INTRINSICS_ONLY AND VCA_ARM_INTRINSICS_ONLY)
-            # Intrinsics path does not require an assembler
-            set(SIMD_ENABLED ON)
-            message(STATUS "SIMD: enabling ARM NEON intrinsics (no assembler required)")
-        else()
-            # If you have .S files, require generic ASM
-            check_language(ASM)
-            if (CMAKE_ASM_COMPILER)
-                enable_language(ASM)
-                set(SIMD_ENABLED ON)
-                message(STATUS "SIMD: enabling ARM assembly (${CMAKE_ASM_COMPILER})")
-            else()
-                message(WARNING "SIMD: no ARM assembler found -> disabling SIMD")
-            endif()
-        endif()
-    else()
-        message(STATUS "SIMD: unsupported/unknown arch for SIMD -> leaving disabled")
-    endif()
-else()
-    message(STATUS "SIMD: disabled by user (-DENABLE_SIMD=OFF)")
-endif()
-
-# Export these to the analyzer (subdirectory can read them)
-set(SIMD_ENABLED ${SIMD_ENABLED} PARENT_SCOPE) # if someone includes this dir as subdir
-set(NASM_ENABLED ${NASM_ENABLED} PARENT_SCOPE)
-
-# Also make available to children of this directory
-set(SIMD_ENABLED ${SIMD_ENABLED} CACHE INTERNAL "SIMD enabled after toolchain detection")
-set(NASM_ENABLED ${NASM_ENABLED} CACHE INTERNAL "NASM (or equivalent) enabled on x86")
+# SIMD is handled entirely by Google Highway at runtime. No NASM, no
+# arch detection, no configure-time dispatch. See cmake/FetchHighway.cmake.
 
 # Libraries in this directory
 add_library(vcaLib "")
@@ -189,7 +92,7 @@ if(${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU")
     set(GCC 1)
 endif()
 
-# Add analyzer (it will conditionally add simd/ and SIMD targets)
+# Add analyzer (Highway SIMD is compiled directly into vcaInternal)
 add_subdirectory(analyzer)
 
 # Tests
@@ -203,12 +106,6 @@ endif()
 # Includes & compile definitions
 target_include_directories(vcaInternal PRIVATE ${LIB_SOURCE_DIR})
 target_include_directories(vcaLib PRIVATE ${LIB_SOURCE_DIR})
-
-# If SIMD is not enabled, let sources choose scalar paths
-if (NOT SIMD_ENABLED)
-    target_compile_definitions(vcaInternal PRIVATE VCA_DISABLE_SIMD=1)
-    target_compile_definitions(vcaLib       PRIVATE VCA_DISABLE_SIMD=1)
-endif()
 
 target_link_libraries(vcaLib
     vcaInternal
