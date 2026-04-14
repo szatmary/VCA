@@ -19,11 +19,14 @@
 #include <gtest/gtest.h>
 
 #include <analyzer/DCTTransform.h>
+#include <analyzer/DCTTransformsNative.h>
 #include <analyzer/common/common.h>
 #include <analyzer/simd/cpu.h>
+#include <analyzer/simd/dct_hwy.h>
 #include <test/common/functions.h>
 
 #include <cstring>
+#include <random>
 
 namespace {
 
@@ -35,6 +38,15 @@ void assertUsedValuesAreIdentical(int16_t *data1, int16_t *data2, const unsigned
     const auto nrUsedPixels = blockSize * blockSize;
     for (unsigned i = 0; i < nrUsedPixels; i++)
         ASSERT_EQ(data1[i], data2[i]);
+}
+
+void fillRandomBlock(int16_t *block, unsigned size, unsigned bitDepth, uint32_t seed)
+{
+    std::mt19937 rng(seed);
+    const int16_t maxVal = static_cast<int16_t>((1 << bitDepth) - 1);
+    std::uniform_int_distribution<int> dist(0, maxVal);
+    for (unsigned i = 0; i < size * size; ++i)
+        block[i] = static_cast<int16_t>(dist(rng));
 }
 
 } // namespace
@@ -99,3 +111,54 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Combine(testing::ValuesIn({BlockSize(8u), BlockSize(16u), BlockSize(32u)}),
                      testing::ValuesIn({BitDepth(8u), BitDepth(10u), BitDepth(12u)})),
     &DCTTestImplementationsIdenticalOutputFixture::generateName);
+
+TEST(DCTHighwayCrossCheck, Dct8_BitDepth8)
+{
+    constexpr unsigned N = 8;
+    int16_t src[N * N];
+    int16_t dstNative[N * N];
+    int16_t dstHighway[N * N];
+
+    for (uint32_t seed = 1; seed <= 32; ++seed)
+    {
+        fillRandomBlock(src, N, 8, seed);
+        vca::dct8_c(src, dstNative,  N, 8);
+        vca::Dct8  (src, dstHighway, N, 8);
+        for (unsigned i = 0; i < N * N; ++i)
+            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
+    }
+}
+
+TEST(DCTHighwayCrossCheck, Dct8_BitDepth10)
+{
+    constexpr unsigned N = 8;
+    int16_t src[N * N];
+    int16_t dstNative[N * N];
+    int16_t dstHighway[N * N];
+
+    for (uint32_t seed = 1; seed <= 32; ++seed)
+    {
+        fillRandomBlock(src, N, 10, seed);
+        vca::dct8_c(src, dstNative,  N, 10);
+        vca::Dct8  (src, dstHighway, N, 10);
+        for (unsigned i = 0; i < N * N; ++i)
+            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
+    }
+}
+
+TEST(DCTHighwayCrossCheck, Dct8_BitDepth12)
+{
+    constexpr unsigned N = 8;
+    int16_t src[N * N];
+    int16_t dstNative[N * N];
+    int16_t dstHighway[N * N];
+
+    for (uint32_t seed = 1; seed <= 32; ++seed)
+    {
+        fillRandomBlock(src, N, 12, seed);
+        vca::dct8_c(src, dstNative,  N, 12);
+        vca::Dct8  (src, dstHighway, N, 12);
+        for (unsigned i = 0; i < N * N; ++i)
+            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
+    }
+}
