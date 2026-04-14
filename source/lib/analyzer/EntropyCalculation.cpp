@@ -21,7 +21,6 @@
 #include <analyzer/EntropyCalculation.h>
 #include <analyzer/EntropyNative.h>
 #include <analyzer/common/common.h>
-#include <analyzer/simd/entropy.h>
 
 #include <cstring>
 
@@ -44,13 +43,7 @@ double performEntropy(const unsigned blockSize,
         }
     }
 
-    double entropy    = 0;
-    // Calculate entropy
-    //if (cpuSimd == CpuSimd::AVX2)
-    //{
-    //    entropy = entropy_avx2(block);
-    //}
-    //else
+    double entropy = 0;
     if (enableLowpass)
         entropy = vca::entropy_lowpass_c(block, blockSize);
     else
