@@ -21,6 +21,7 @@
 #include <analyzer/EntropyCalculation.h>
 #include <analyzer/simd/cpu.h>
 
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <string>
@@ -132,7 +133,7 @@ vca_result Analyzer::pullResult(vca_frame_results *outputResult)
             auto entropyDiff     = result->entropyDiff;
             auto entropyDiffPrev = this->previousResult->entropyDiff;
             if (this->previousResult->entropyDiff > 0)
-                result->entropyEpsilon = abs(entropyDiffPrev - entropyDiff);
+                result->entropyEpsilon = std::abs(entropyDiffPrev - entropyDiff);
         }
     }
 
