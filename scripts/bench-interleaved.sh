@@ -62,10 +62,11 @@ cmake --build build-highway -j > /dev/null
 ARGS="--input $TOS_YUV --input-res 1920x800 --input-depth 8 --input-fps 24 --input-csp 420"
 
 # Seconds to sleep between runs so the machine can return to a
-# comparable thermal baseline. 30 s is enough for Apple silicon and
-# mainstream desktop x86 to shed most accumulated heat from a short
-# (< 20 s) run. Override with COOLDOWN=0 for a back-to-back run.
-COOLDOWN="${COOLDOWN:-30}"
+# comparable thermal baseline. 5 s is short enough to keep benchmarking
+# quick while still letting most short-term thermal accumulation bleed
+# off. Override with COOLDOWN=0 for back-to-back runs, or COOLDOWN=30
+# on a thermally-limited machine that needs longer to settle.
+COOLDOWN="${COOLDOWN:-5}"
 
 run() {
     local branch="$1" idx="$2"

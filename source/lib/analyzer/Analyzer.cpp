@@ -33,7 +33,14 @@ namespace vca {
 Analyzer::Analyzer(vca_param cfg)
 {
     this->cfg = cfg;
-    this->jobs.setMaximumQueueSize(5);
+    // Job queue depth is capped so the input reader doesn't buffer the
+    // entire video in memory. It needs to be larger than the worker-thread
+    // count so all workers can find work when the main thread is briefly
+    // slow, otherwise workers serialize on waitAndPop. 5 was undersized for
+    // any reasonable thread count — bumping to 64 gives plenty of headroom
+    // while still bounding memory (each slot is a Job with a frame pointer,
+    // not a frame copy).
+    this->jobs.setMaximumQueueSize(64);
 
     const auto blockSize = this->cfg.blockSize;
     if (blockSize != 8 && blockSize != 16 && blockSize != 32)
