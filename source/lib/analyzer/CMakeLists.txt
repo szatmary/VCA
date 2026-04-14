@@ -96,7 +96,7 @@ if (SIMD_ENABLED)
   add_subdirectory(simd)
   # Link SIMD libs only when they exist
   if (TARGET vcaLibSimd8bit OR TARGET vcaLibSimd10bit OR TARGET vcaLibSimd12bit)
-    target_link_libraries(vcaInternal
+    target_link_libraries(vcaInternal PRIVATE
       Threads::Threads
       $<$<TARGET_EXISTS:vcaLibSimd8bit>:vcaLibSimd8bit>
       $<$<TARGET_EXISTS:vcaLibSimd10bit>:vcaLibSimd10bit>
@@ -104,9 +104,15 @@ if (SIMD_ENABLED)
     )
   else()
     # Fallback: Still link Threads; no SIMD libs
-    target_link_libraries(vcaInternal Threads::Threads)
+    target_link_libraries(vcaInternal PRIVATE Threads::Threads)
   endif()
 else()
   # SIMD disabled: Don't add simd/, don't link simd libs
-  target_link_libraries(vcaInternal Threads::Threads)
+  target_link_libraries(vcaInternal PRIVATE Threads::Threads)
 endif()
+
+# Highway (dry link): link privately so subsequent tasks can use Highway
+# types in analyzer sources. Marked SYSTEM so Highway's headers are excluded
+# from VCA's own warning flags.
+target_link_libraries(vcaInternal PRIVATE hwy)
+target_include_directories(vcaInternal SYSTEM PRIVATE ${highway_SOURCE_DIR})
