@@ -4,16 +4,18 @@ The software is tested mostly in Linux and Windows OS. It requires some pre-requ
 
 ## Prerequisites
 
- 1. [CMake](https://cmake.org) version 3.13 or higher.
+ 1. [CMake](https://cmake.org) version 3.14 or higher (required for `FetchContent_MakeAvailable`).
  2. [Git](https://git-scm.com/).
- 3. C++ compiler with C++11 support
- 4. [NASM](https://nasm.us/) assembly compiler (for x86 SIMD support)
+ 3. C++ compiler with C++17 support.
+ 4. Network access at configure time (CMake fetches [Google Highway](https://github.com/google/highway) for SIMD kernels via `FetchContent`; subsequent builds use the cached copy under `build/_deps/`).
 
-The following C++11 compilers have been known to work:
+The following C++17 compilers have been known to work:
 
- * Visual Studio 2015 or later
- * GCC 4.8 or later
- * Clang 3.3 or later
+ * Visual Studio 2019 or later
+ * GCC 7 or later
+ * Clang 5 or later
+
+NASM is **not** required — the previous hand-written x86 assembly layer was replaced with a portable implementation using Google Highway. The Highway dependency is fetched automatically at CMake configure time.
 
 ## Execute Build
 
