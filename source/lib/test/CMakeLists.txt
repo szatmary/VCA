@@ -26,6 +26,7 @@ target_include_directories(unitTestSuite PRIVATE ${LIB_SOURCE_DIR})
 target_link_libraries(
     unitTestSuite
     vcaInternal
+    hwy
     GTest::gtest_main
 )
 

@@ -24,8 +24,12 @@
 #include <analyzer/simd/dct_hwy.h>
 #include <test/common/functions.h>
 
+#include <hwy/targets.h>
+
 #include <cstring>
 #include <random>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -98,155 +102,114 @@ INSTANTIATE_TEST_SUITE_P(
                      testing::ValuesIn({BitDepth(8u), BitDepth(10u), BitDepth(12u)})),
     &DCTTestImplementationsIdenticalOutputFixture::generateName);
 
-TEST(DCTHighwayCrossCheck, Dct8_BitDepth8)
+class DCTHighwayTargetFixture : public ::testing::TestWithParam<int64_t>
+{
+protected:
+    void SetUp() override
+    {
+        hwy::SetSupportedTargetsForTest(GetParam());
+    }
+
+    void TearDown() override
+    {
+        // 0 restores Highway's default (runtime-detected) target selection.
+        hwy::SetSupportedTargetsForTest(0);
+    }
+};
+
+TEST_P(DCTHighwayTargetFixture, Dct8_AllBitDepths)
 {
     constexpr unsigned N = 8;
     int16_t src[N * N];
     int16_t dstNative[N * N];
     int16_t dstHighway[N * N];
 
-    for (uint32_t seed = 1; seed <= 32; ++seed)
+    for (unsigned bitDepth : {8u, 10u, 12u})
     {
-        fillRandomBlock(src, N, 8, seed);
-        vca::dct8_c(src, dstNative,  N, 8);
-        vca::Dct8  (src, dstHighway, N, 8);
-        for (unsigned i = 0; i < N * N; ++i)
-            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
+        for (uint32_t seed = 1; seed <= 32; ++seed)
+        {
+            fillRandomBlock(src, N, bitDepth, seed);
+            vca::dct8_c(src, dstNative,  N, bitDepth);
+            vca::Dct8  (src, dstHighway, N, bitDepth);
+            for (unsigned i = 0; i < N * N; ++i)
+                ASSERT_EQ(dstNative[i], dstHighway[i])
+                    << "target=" << hwy::TargetName(GetParam())
+                    << " bitDepth=" << bitDepth
+                    << " seed=" << seed
+                    << " idx=" << i;
+        }
     }
 }
 
-TEST(DCTHighwayCrossCheck, Dct8_BitDepth10)
-{
-    constexpr unsigned N = 8;
-    int16_t src[N * N];
-    int16_t dstNative[N * N];
-    int16_t dstHighway[N * N];
-
-    for (uint32_t seed = 1; seed <= 32; ++seed)
-    {
-        fillRandomBlock(src, N, 10, seed);
-        vca::dct8_c(src, dstNative,  N, 10);
-        vca::Dct8  (src, dstHighway, N, 10);
-        for (unsigned i = 0; i < N * N; ++i)
-            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
-    }
-}
-
-TEST(DCTHighwayCrossCheck, Dct8_BitDepth12)
-{
-    constexpr unsigned N = 8;
-    int16_t src[N * N];
-    int16_t dstNative[N * N];
-    int16_t dstHighway[N * N];
-
-    for (uint32_t seed = 1; seed <= 32; ++seed)
-    {
-        fillRandomBlock(src, N, 12, seed);
-        vca::dct8_c(src, dstNative,  N, 12);
-        vca::Dct8  (src, dstHighway, N, 12);
-        for (unsigned i = 0; i < N * N; ++i)
-            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
-    }
-}
-
-TEST(DCTHighwayCrossCheck, Dct16_BitDepth8)
+TEST_P(DCTHighwayTargetFixture, Dct16_AllBitDepths)
 {
     constexpr unsigned N = 16;
     int16_t src[N * N];
     int16_t dstNative[N * N];
     int16_t dstHighway[N * N];
 
-    for (uint32_t seed = 1; seed <= 32; ++seed)
+    for (unsigned bitDepth : {8u, 10u, 12u})
     {
-        fillRandomBlock(src, N, 8, seed);
-        vca::dct16_c(src, dstNative,  N, 8);
-        vca::Dct16  (src, dstHighway, N, 8);
-        for (unsigned i = 0; i < N * N; ++i)
-            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
+        for (uint32_t seed = 1; seed <= 32; ++seed)
+        {
+            fillRandomBlock(src, N, bitDepth, seed);
+            vca::dct16_c(src, dstNative,  N, bitDepth);
+            vca::Dct16  (src, dstHighway, N, bitDepth);
+            for (unsigned i = 0; i < N * N; ++i)
+                ASSERT_EQ(dstNative[i], dstHighway[i])
+                    << "target=" << hwy::TargetName(GetParam())
+                    << " bitDepth=" << bitDepth
+                    << " seed=" << seed
+                    << " idx=" << i;
+        }
     }
 }
 
-TEST(DCTHighwayCrossCheck, Dct16_BitDepth10)
-{
-    constexpr unsigned N = 16;
-    int16_t src[N * N];
-    int16_t dstNative[N * N];
-    int16_t dstHighway[N * N];
-
-    for (uint32_t seed = 1; seed <= 32; ++seed)
-    {
-        fillRandomBlock(src, N, 10, seed);
-        vca::dct16_c(src, dstNative,  N, 10);
-        vca::Dct16  (src, dstHighway, N, 10);
-        for (unsigned i = 0; i < N * N; ++i)
-            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
-    }
-}
-
-TEST(DCTHighwayCrossCheck, Dct16_BitDepth12)
-{
-    constexpr unsigned N = 16;
-    int16_t src[N * N];
-    int16_t dstNative[N * N];
-    int16_t dstHighway[N * N];
-
-    for (uint32_t seed = 1; seed <= 32; ++seed)
-    {
-        fillRandomBlock(src, N, 12, seed);
-        vca::dct16_c(src, dstNative,  N, 12);
-        vca::Dct16  (src, dstHighway, N, 12);
-        for (unsigned i = 0; i < N * N; ++i)
-            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
-    }
-}
-
-TEST(DCTHighwayCrossCheck, Dct32_BitDepth8)
+TEST_P(DCTHighwayTargetFixture, Dct32_AllBitDepths)
 {
     constexpr unsigned N = 32;
     int16_t src[N * N];
     int16_t dstNative[N * N];
     int16_t dstHighway[N * N];
 
-    for (uint32_t seed = 1; seed <= 32; ++seed)
+    for (unsigned bitDepth : {8u, 10u, 12u})
     {
-        fillRandomBlock(src, N, 8, seed);
-        vca::dct32_c(src, dstNative,  N, 8);
-        vca::Dct32  (src, dstHighway, N, 8);
-        for (unsigned i = 0; i < N * N; ++i)
-            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
+        for (uint32_t seed = 1; seed <= 32; ++seed)
+        {
+            fillRandomBlock(src, N, bitDepth, seed);
+            vca::dct32_c(src, dstNative,  N, bitDepth);
+            vca::Dct32  (src, dstHighway, N, bitDepth);
+            for (unsigned i = 0; i < N * N; ++i)
+                ASSERT_EQ(dstNative[i], dstHighway[i])
+                    << "target=" << hwy::TargetName(GetParam())
+                    << " bitDepth=" << bitDepth
+                    << " seed=" << seed
+                    << " idx=" << i;
+        }
     }
 }
 
-TEST(DCTHighwayCrossCheck, Dct32_BitDepth10)
+namespace {
+
+std::vector<int64_t> GetHighwayTargetsToTest()
 {
-    constexpr unsigned N = 32;
-    int16_t src[N * N];
-    int16_t dstNative[N * N];
-    int16_t dstHighway[N * N];
-
-    for (uint32_t seed = 1; seed <= 32; ++seed)
-    {
-        fillRandomBlock(src, N, 10, seed);
-        vca::dct32_c(src, dstNative,  N, 10);
-        vca::Dct32  (src, dstHighway, N, 10);
-        for (unsigned i = 0; i < N * N; ++i)
-            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
-    }
+    std::vector<int64_t> out;
+    const int64_t supported = hwy::SupportedTargets();
+    for (int64_t bit = 1; bit != 0; bit <<= 1)
+        if (supported & bit)
+            out.push_back(bit);
+    return out;
 }
 
-TEST(DCTHighwayCrossCheck, Dct32_BitDepth12)
+std::string HighwayTargetName(const ::testing::TestParamInfo<int64_t> &info)
 {
-    constexpr unsigned N = 32;
-    int16_t src[N * N];
-    int16_t dstNative[N * N];
-    int16_t dstHighway[N * N];
-
-    for (uint32_t seed = 1; seed <= 32; ++seed)
-    {
-        fillRandomBlock(src, N, 12, seed);
-        vca::dct32_c(src, dstNative,  N, 12);
-        vca::Dct32  (src, dstHighway, N, 12);
-        for (unsigned i = 0; i < N * N; ++i)
-            ASSERT_EQ(dstNative[i], dstHighway[i]) << "seed=" << seed << " idx=" << i;
-    }
+    return hwy::TargetName(info.param);
 }
+
+} // namespace
+
+INSTANTIATE_TEST_SUITE_P(
+    AllHighwayTargets,
+    DCTHighwayTargetFixture,
+    ::testing::ValuesIn(GetHighwayTargetsToTest()),
+    &HighwayTargetName);
