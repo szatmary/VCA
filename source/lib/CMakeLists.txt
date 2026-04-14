@@ -210,22 +210,9 @@ if (NOT SIMD_ENABLED)
     target_compile_definitions(vcaLib       PRIVATE VCA_DISABLE_SIMD=1)
 endif()
 
-# Linking (safe: only link SIMD libs if they exist)
-# analyzer/simd creates vcaLibSimd{8,10,12} only when SIMD_ENABLED=ON
 target_link_libraries(vcaLib
     vcaInternal
 )
-
-# If you want vcaLib to link SIMD libs directly (optional), guard with TARGET_EXISTS:
-if (SIMD_ENABLED)
-    if (TARGET vcaLibSimd8bit OR TARGET vcaLibSimd10bit OR TARGET vcaLibSimd12bit)
-        target_link_libraries(vcaLib
-            $<$<TARGET_EXISTS:vcaLibSimd8bit>:vcaLibSimd8bit>
-            $<$<TARGET_EXISTS:vcaLibSimd10bit>:vcaLibSimd10bit>
-            $<$<TARGET_EXISTS:vcaLibSimd12bit>:vcaLibSimd12bit>
-        )
-    endif()
-endif()
 
 set_target_properties(vcaLib PROPERTIES OUTPUT_NAME vcaLib)
 set_target_properties(vcaLib PROPERTIES PUBLIC_HEADER "vcaLib.h")

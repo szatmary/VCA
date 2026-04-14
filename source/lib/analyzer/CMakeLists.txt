@@ -94,25 +94,12 @@ if (NOT SIMD_ENABLED)
   message(STATUS "SIMD: Disabled - compiling scalar fallback (VCA_DISABLE_SIMD=1)")
 endif()
 
-# Add SIMD subdir & link only if enabled
+# SIMD is Highway-based and compiled directly into vcaInternal.
+# The simd/ subdirectory is a stub (see simd/CMakeLists.txt).
 if (SIMD_ENABLED)
   add_subdirectory(simd)
-  # Link SIMD libs only when they exist
-  if (TARGET vcaLibSimd8bit OR TARGET vcaLibSimd10bit OR TARGET vcaLibSimd12bit)
-    target_link_libraries(vcaInternal PRIVATE
-      Threads::Threads
-      $<$<TARGET_EXISTS:vcaLibSimd8bit>:vcaLibSimd8bit>
-      $<$<TARGET_EXISTS:vcaLibSimd10bit>:vcaLibSimd10bit>
-      $<$<TARGET_EXISTS:vcaLibSimd12bit>:vcaLibSimd12bit>
-    )
-  else()
-    # Fallback: Still link Threads; no SIMD libs
-    target_link_libraries(vcaInternal PRIVATE Threads::Threads)
-  endif()
-else()
-  # SIMD disabled: Don't add simd/, don't link simd libs
-  target_link_libraries(vcaInternal PRIVATE Threads::Threads)
 endif()
+target_link_libraries(vcaInternal PRIVATE Threads::Threads)
 
 # Highway (dry link): link privately so subsequent tasks can use Highway
 # types in analyzer sources. Marked SYSTEM so Highway's headers are excluded
