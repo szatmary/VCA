@@ -53,7 +53,12 @@
 	
 - `--no-simd`
 
-	VCA will use all detected CPU SIMD architectures by default. This will disable that detection.
+	Disable SIMD acceleration. VCA uses Google Highway for portable
+	runtime SIMD dispatch; Highway normally selects the best target
+	available on the host CPU (SSE4 / AVX2 / AVX-512 / NEON). With
+	`--no-simd`, Highway is constrained to its scalar target, which
+	matches the native C++ reference implementation. Useful for
+	debugging or benchmarking the scalar path.
 
 - `--no-dctenergy`
 
