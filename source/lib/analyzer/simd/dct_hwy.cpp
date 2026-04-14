@@ -513,32 +513,45 @@ static HWY_INLINE void Dct32Row(const int16_t *src, int16_t *dst, intptr_t dstSt
     if constexpr (Shift <= 8)
     {
         // Pass 1 fast path: O[k] = src[k] - src[31-k] fits in int16
-        // because src is bit-depth-bounded. Compute O as two 8-lane
-        // int16 vectors and use WidenMulPairwiseAdd. This is the
-        // single biggest hotspot on arm64 — 16 outputs × length 16.
-        const hn::CappedTag<int16_t, 8> d16_full;
-        const hn::Repartition<int32_t, decltype(d16_full)> d32_wide;
+        // because src is bit-depth-bounded. Compute O into an aligned
+        // 16-element int16 buffer, then run the length-16 dot product
+        // with a cap-16 int16 tag. On AVX2 (native 16-lane int16) this
+        // issues one vpmaddwd per output; on NEON (native 8-lane) the
+        // inner loop runs twice, matching the previous behavior.
+        // This is the single biggest hotspot on x86 — 16 outputs × 16.
+        const hn::CappedTag<int16_t, 8> d16_half_i16;
 
-        const auto a16 = hn::LoadU(d16_full, src);        // src[0..7]
-        const auto b16 = hn::LoadU(d16_full, src + 8);    // src[8..15]
-        const auto c16 = hn::LoadU(d16_full, src + 16);   // src[16..23]
-        const auto e16 = hn::LoadU(d16_full, src + 24);   // src[24..31]
+        const auto a16 = hn::LoadU(d16_half_i16, src);        // src[0..7]
+        const auto b16 = hn::LoadU(d16_half_i16, src + 8);    // src[8..15]
+        const auto c16 = hn::LoadU(d16_half_i16, src + 16);   // src[16..23]
+        const auto e16 = hn::LoadU(d16_half_i16, src + 24);   // src[24..31]
 
-        const auto e16_rev = hn::Reverse(d16_full, e16);  // [src[31..24]]
-        const auto c16_rev = hn::Reverse(d16_full, c16);  // [src[23..16]]
+        const auto e16_rev = hn::Reverse(d16_half_i16, e16);  // [src[31..24]]
+        const auto c16_rev = hn::Reverse(d16_half_i16, c16);  // [src[23..16]]
 
         // O[0..7]  = src[0..7]  - src[31..24]
         // O[8..15] = src[8..15] - src[23..16]
-        const auto O16_lo = hn::Sub(a16, e16_rev);
-        const auto O16_hi = hn::Sub(b16, c16_rev);
+        alignas(32) int16_t O_arr[16];
+        hn::StoreU(hn::Sub(a16, e16_rev), d16_half_i16, O_arr);
+        hn::StoreU(hn::Sub(b16, c16_rev), d16_half_i16, O_arr + 8);
+
+        // Cap-16 int16 tag: 16 lanes on AVX2+, 8 lanes on NEON.
+        const hn::CappedTag<int16_t, 16> d16_cap16;
+        const hn::Repartition<int32_t, decltype(d16_cap16)> d32_cap;
+        using VecD32Cap = hn::Vec<decltype(d32_cap)>;
+        const size_t kLanes16 = hn::Lanes(d16_cap16);
 
         for (int k = 1; k < 32; k += 2)
         {
-            const auto coef_lo = hn::LoadU(d16_full, &kT32[k][0]);
-            const auto coef_hi = hn::LoadU(d16_full, &kT32[k][8]);
-            const auto prod_lo = hn::WidenMulPairwiseAdd(d32_wide, O16_lo, coef_lo);
-            const auto prod_hi = hn::WidenMulPairwiseAdd(d32_wide, O16_hi, coef_hi);
-            const int32_t sum = hn::ReduceSum(d32_wide, hn::Add(prod_lo, prod_hi));
+            VecD32Cap accum = hn::Zero(d32_cap);
+            for (size_t i = 0; i < 16; i += kLanes16)
+            {
+                const auto o_slice    = hn::LoadU(d16_cap16, &O_arr[i]);
+                const auto coef_slice = hn::LoadU(d16_cap16, &kT32[k][i]);
+                accum = hn::Add(accum,
+                                hn::WidenMulPairwiseAdd(d32_cap, o_slice, coef_slice));
+            }
+            const int32_t sum = hn::ReduceSum(d32_cap, accum);
             dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
         }
     }
