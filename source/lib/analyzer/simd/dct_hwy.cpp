@@ -230,134 +230,58 @@ void Dct8Impl_bd8 (const int16_t *s, int16_t *d, intptr_t st) { Dct8ImplT<2>(s, 
 void Dct8Impl_bd10(const int16_t *s, int16_t *d, intptr_t st) { Dct8ImplT<4>(s, d, st); }
 void Dct8Impl_bd12(const int16_t *s, int16_t *d, intptr_t st) { Dct8ImplT<6>(s, d, st); }
 
-// One row of a 16x16 DCT. Factored butterfly mirroring partialButterfly16.
-// Butterfly runs on 4-lane int32 vectors. For pass 1 (Shift <= 8) the
-// length-8 dot products on O use an int16 fast path via
-// hn::WidenMulPairwiseAdd — this maps to smull/smlal on NEON, roughly
-// double the throughput of the int32 Mul path. Pass 2 (Shift >= 9) keeps
-// the int32 form because pass-1 coefficients exceed int16 range. Length-4
-// dot products on EO stay scalar (too small to win on SIMD).
+// One row of a 16x16 DCT. Direct matrix-vector multiply: each of the 16
+// output coefficients is a length-16 dot product of src with a row of
+// kT16. Two WidenMulPairwiseAdd calls per output (one for src[0..7] with
+// coef[0..7], one for src[8..15] with coef[8..15]), one Add, one
+// ReduceSum, one scalar shift-cast-store. This replaces a factored
+// butterfly whose mixed int32/int16/scalar tails left most of the SIMD
+// throughput on the floor.
+//
+// The uniform pmaddwd shape is bit-exact with the scalar reference:
+// integer addition is associative, so pair-wise reduction by pmaddwd
+// lands on the same int32 sum as the reference's left-to-right fold,
+// and the final static_cast<int16_t> wraps identically.
+//
+// Safe across both DCT passes without any Shift branch: pmaddwd takes
+// int16 inputs and accumulates in int32 from the very first operation,
+// so no intermediate overflows on bit-depth-bounded inputs (int16 fits
+// trivially; int32 pair-sum max ~5.9M per lane for |coef|<=90).
 template <int Shift>
 static HWY_INLINE void Dct16Row(const int16_t *src, int16_t *dst, intptr_t dstStride)
 {
     constexpr int32_t kAdd = 1 << (Shift - 1);
 
 #if HWY_TARGET != HWY_SCALAR
-    const hn::CappedTag<int32_t, 4> d32;
-    const hn::Rebind<int16_t, decltype(d32)> d16_half;  // 4-lane int16
+    // Use a tag capped at 16 int16 lanes = 256-bit max. On AVX2 this
+    // yields 16 lanes (full 256-bit YMM), so a whole row loads in one
+    // instruction and each output is a single WidenMulPairwiseAdd. On
+    // NEON and 128-bit SSE, this degrades to 8 lanes (128-bit) and the
+    // inner loop runs twice per output. Either way the lane count is
+    // compile-time known, so the loop unrolls cleanly.
+    const hn::CappedTag<int16_t, 16> d16;
+    const hn::Repartition<int32_t, decltype(d16)> d32;
+    constexpr size_t kLanes = hn::MaxLanes(d16);
+    static_assert(16 % kLanes == 0, "Dct16 row width must be a multiple of lane count");
 
-    // Load src[0..3], src[4..7], src[8..11], src[12..15] and promote to int32.
-    const auto s0 = hn::PromoteTo(d32, hn::LoadU(d16_half, src));       // src[0..3]
-    const auto s1 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 4));   // src[4..7]
-    const auto s2 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 8));   // src[8..11]
-    const auto s3 = hn::PromoteTo(d32, hn::LoadU(d16_half, src + 12));  // src[12..15]
-
-    // E[k] = src[k] + src[15-k], O[k] = src[k] - src[15-k] for k = 0..7.
-    // E[0..3] = s0 + Reverse(s3),  E[4..7] = s1 + Reverse(s2)
-    const auto s3_rev = hn::Reverse(d32, s3);  // [src[15], src[14], src[13], src[12]]
-    const auto s2_rev = hn::Reverse(d32, s2);  // [src[11], src[10], src[9], src[8]]
-
-    const auto E_03 = hn::Add(s0, s3_rev);  // E[0..3]
-    const auto E_47 = hn::Add(s1, s2_rev);  // E[4..7]
-    const auto O_03 = hn::Sub(s0, s3_rev);  // O[0..3]
-    const auto O_47 = hn::Sub(s1, s2_rev);  // O[4..7]
-
-    // EE[k] = E[k] + E[7-k], EO[k] = E[k] - E[7-k] for k = 0..3.
-    const auto E_47_rev = hn::Reverse(d32, E_47);  // [E[7], E[6], E[5], E[4]]
-    const auto EEv = hn::Add(E_03, E_47_rev);      // EE[0..3]
-    const auto EOv = hn::Sub(E_03, E_47_rev);      // EO[0..3]
-
-    alignas(16) int32_t EE[4];
-    alignas(16) int32_t EO[4];
-    hn::StoreU(EEv, d32, EE);
-    hn::StoreU(EOv, d32, EO);
-#else
-    int32_t E[8];
-    int32_t O_arr_scalar[8];
-    for (int k = 0; k < 8; ++k)
+    for (int k = 0; k < 16; ++k)
     {
-        E[k] = src[k] + src[15 - k];
-        O_arr_scalar[k] = src[k] - src[15 - k];
-    }
-    int32_t EE[4];
-    int32_t EO[4];
-    for (int k = 0; k < 4; ++k)
-    {
-        EE[k] = E[k] + E[7 - k];
-        EO[k] = E[k] - E[7 - k];
-    }
-#endif
-
-    // EEE and EEO — length-2 each, scalar.
-    const int32_t EEE0 = EE[0] + EE[3];
-    const int32_t EEE1 = EE[1] + EE[2];
-    const int32_t EEO0 = EE[0] - EE[3];
-    const int32_t EEO1 = EE[1] - EE[2];
-
-    // dst[0], dst[8*stride]: length-2 dot product on EEE.
-    dst[0 * dstStride] = static_cast<int16_t>(
-        (kT16[0][0] * EEE0 + kT16[0][1] * EEE1 + kAdd) >> Shift);
-    dst[8 * dstStride] = static_cast<int16_t>(
-        (kT16[8][0] * EEE0 + kT16[8][1] * EEE1 + kAdd) >> Shift);
-
-    // dst[4*stride], dst[12*stride]: length-2 dot product on EEO.
-    dst[4 * dstStride] = static_cast<int16_t>(
-        (kT16[4][0] * EEO0 + kT16[4][1] * EEO1 + kAdd) >> Shift);
-    dst[12 * dstStride] = static_cast<int16_t>(
-        (kT16[12][0] * EEO0 + kT16[12][1] * EEO1 + kAdd) >> Shift);
-
-    // dst[{2,6,10,14}*stride]: length-4 dot products on EO. Scalar.
-    for (int k = 2; k < 16; k += 4)
-    {
-        const int32_t sum = kT16[k][0] * EO[0] + kT16[k][1] * EO[1]
-                          + kT16[k][2] * EO[2] + kT16[k][3] * EO[3];
+        auto acc = hn::Zero(d32);
+        for (size_t i = 0; i < 16; i += kLanes)
+        {
+            const auto s    = hn::LoadU(d16, src + i);
+            const auto coef = hn::LoadU(d16, &kT16[k][i]);
+            acc = hn::Add(acc, hn::WidenMulPairwiseAdd(d32, s, coef));
+        }
+        const int32_t sum = hn::ReduceSum(d32, acc);
         dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
     }
-
-    // dst[odd*stride]: length-8 dot products on O.
-#if HWY_TARGET != HWY_SCALAR
-    if constexpr (Shift <= 8)
-    {
-        // Pass 1 fast path: O[k] = src[k] - src[15-k] fits in int16
-        // because src is bit-depth-bounded (max ~4095 for bd12). Compute
-        // O as an 8-lane int16 vector and use WidenMulPairwiseAdd, which
-        // maps to smull/smlal on NEON — ~2x the throughput of int32 Mul.
-        const hn::CappedTag<int16_t, 8> d16_full;
-        const hn::Repartition<int32_t, decltype(d16_full)> d32_wide;
-
-        const auto lo16 = hn::LoadU(d16_full, src);       // src[0..7]
-        const auto hi16 = hn::LoadU(d16_full, src + 8);   // src[8..15]
-        const auto hi16_rev = hn::Reverse(d16_full, hi16);
-        const auto O16 = hn::Sub(lo16, hi16_rev);         // O[0..7] in int16
-
-        for (int k = 1; k < 16; k += 2)
-        {
-            const auto coef16 = hn::LoadU(d16_full, &kT16[k][0]);
-            const auto prod = hn::WidenMulPairwiseAdd(d32_wide, O16, coef16);
-            const int32_t sum = hn::ReduceSum(d32_wide, prod);
-            dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
-        }
-    }
-    else
-    {
-        // Pass 2: O can exceed int16 range, so stay in int32.
-        // O_03 and O_47 are already loaded as int32 vectors.
-        for (int k = 1; k < 16; k += 2)
-        {
-            const auto c_03 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT16[k][0]));
-            const auto c_47 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT16[k][4]));
-            const auto prod = hn::Add(hn::Mul(O_03, c_03), hn::Mul(O_47, c_47));
-            const int32_t sum = hn::ReduceSum(d32, prod);
-            dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
-        }
-    }
 #else
-    for (int k = 1; k < 16; k += 2)
+    for (int k = 0; k < 16; ++k)
     {
-        const int32_t sum = kT16[k][0] * O_arr_scalar[0] + kT16[k][1] * O_arr_scalar[1]
-                          + kT16[k][2] * O_arr_scalar[2] + kT16[k][3] * O_arr_scalar[3]
-                          + kT16[k][4] * O_arr_scalar[4] + kT16[k][5] * O_arr_scalar[5]
-                          + kT16[k][6] * O_arr_scalar[6] + kT16[k][7] * O_arr_scalar[7];
+        int32_t sum = 0;
+        for (int i = 0; i < 16; ++i)
+            sum += int32_t(kT16[k][i]) * int32_t(src[i]);
         dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
     }
 #endif
