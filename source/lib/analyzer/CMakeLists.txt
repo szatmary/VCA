@@ -22,11 +22,7 @@ add_library(vcaInternal STATIC
     ProcessingThread.cpp
     ShotDetection.h
     ShotDetection.cpp
-    simd/cpu.h
-    simd/cpu.cpp
-    simd/dct8.h
     simd/dct_hwy.cpp
-    simd/entropy.h
     simd/targets.h
     simd/targets.cpp
 )
