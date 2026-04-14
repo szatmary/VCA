@@ -231,9 +231,12 @@ void Dct8Impl_bd10(const int16_t *s, int16_t *d, intptr_t st) { Dct8ImplT<4>(s, 
 void Dct8Impl_bd12(const int16_t *s, int16_t *d, intptr_t st) { Dct8ImplT<6>(s, d, st); }
 
 // One row of a 16x16 DCT. Factored butterfly mirroring partialButterfly16.
-// Butterfly runs on 4-lane int32 vectors; length-8 dot products on O run
-// as two vector Mul + Add + ReduceSum. Length-4 dot products on EO stay
-// scalar (too small to win on SIMD).
+// Butterfly runs on 4-lane int32 vectors. For pass 1 (Shift <= 8) the
+// length-8 dot products on O use an int16 fast path via
+// hn::WidenMulPairwiseAdd — this maps to smull/smlal on NEON, roughly
+// double the throughput of the int32 Mul path. Pass 2 (Shift >= 9) keeps
+// the int32 form because pass-1 coefficients exceed int16 range. Length-4
+// dot products on EO stay scalar (too small to win on SIMD).
 template <int Shift>
 static HWY_INLINE void Dct16Row(const int16_t *src, int16_t *dst, intptr_t dstStride)
 {
@@ -313,16 +316,40 @@ static HWY_INLINE void Dct16Row(const int16_t *src, int16_t *dst, intptr_t dstSt
 
     // dst[odd*stride]: length-8 dot products on O.
 #if HWY_TARGET != HWY_SCALAR
-    // O_03 and O_47 are already loaded as int32 vectors. For each odd k,
-    // load the first 8 coefficients of kT16[k] (4+4), promote to int32,
-    // multiply, add, reduce.
-    for (int k = 1; k < 16; k += 2)
+    if constexpr (Shift <= 8)
     {
-        const auto c_03 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT16[k][0]));
-        const auto c_47 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT16[k][4]));
-        const auto prod = hn::Add(hn::Mul(O_03, c_03), hn::Mul(O_47, c_47));
-        const int32_t sum = hn::ReduceSum(d32, prod);
-        dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
+        // Pass 1 fast path: O[k] = src[k] - src[15-k] fits in int16
+        // because src is bit-depth-bounded (max ~4095 for bd12). Compute
+        // O as an 8-lane int16 vector and use WidenMulPairwiseAdd, which
+        // maps to smull/smlal on NEON — ~2x the throughput of int32 Mul.
+        const hn::CappedTag<int16_t, 8> d16_full;
+        const hn::Repartition<int32_t, decltype(d16_full)> d32_wide;
+
+        const auto lo16 = hn::LoadU(d16_full, src);       // src[0..7]
+        const auto hi16 = hn::LoadU(d16_full, src + 8);   // src[8..15]
+        const auto hi16_rev = hn::Reverse(d16_full, hi16);
+        const auto O16 = hn::Sub(lo16, hi16_rev);         // O[0..7] in int16
+
+        for (int k = 1; k < 16; k += 2)
+        {
+            const auto coef16 = hn::LoadU(d16_full, &kT16[k][0]);
+            const auto prod = hn::WidenMulPairwiseAdd(d32_wide, O16, coef16);
+            const int32_t sum = hn::ReduceSum(d32_wide, prod);
+            dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
+        }
+    }
+    else
+    {
+        // Pass 2: O can exceed int16 range, so stay in int32.
+        // O_03 and O_47 are already loaded as int32 vectors.
+        for (int k = 1; k < 16; k += 2)
+        {
+            const auto c_03 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT16[k][0]));
+            const auto c_47 = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT16[k][4]));
+            const auto prod = hn::Add(hn::Mul(O_03, c_03), hn::Mul(O_47, c_47));
+            const int32_t sum = hn::ReduceSum(d32, prod);
+            dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
+        }
     }
 #else
     for (int k = 1; k < 16; k += 2)
@@ -482,18 +509,54 @@ static HWY_INLINE void Dct32Row(const int16_t *src, int16_t *dst, intptr_t dstSt
         dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
     }
 
-    // dst[odd*stride]: length-16 dot products on O. Four Mul + three Add + ReduceSum.
-    for (int k = 1; k < 32; k += 2)
+    // dst[odd*stride]: length-16 dot products on O.
+    if constexpr (Shift <= 8)
     {
-        const auto c_a = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][0]));
-        const auto c_b = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][4]));
-        const auto c_c = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][8]));
-        const auto c_d = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][12]));
+        // Pass 1 fast path: O[k] = src[k] - src[31-k] fits in int16
+        // because src is bit-depth-bounded. Compute O as two 8-lane
+        // int16 vectors and use WidenMulPairwiseAdd. This is the
+        // single biggest hotspot on arm64 — 16 outputs × length 16.
+        const hn::CappedTag<int16_t, 8> d16_full;
+        const hn::Repartition<int32_t, decltype(d16_full)> d32_wide;
 
-        const auto p_ab = hn::Add(hn::Mul(O_a, c_a), hn::Mul(O_b, c_b));
-        const auto p_cd = hn::Add(hn::Mul(O_c, c_c), hn::Mul(O_d, c_d));
-        const int32_t sum = hn::ReduceSum(d32, hn::Add(p_ab, p_cd));
-        dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
+        const auto a16 = hn::LoadU(d16_full, src);        // src[0..7]
+        const auto b16 = hn::LoadU(d16_full, src + 8);    // src[8..15]
+        const auto c16 = hn::LoadU(d16_full, src + 16);   // src[16..23]
+        const auto e16 = hn::LoadU(d16_full, src + 24);   // src[24..31]
+
+        const auto e16_rev = hn::Reverse(d16_full, e16);  // [src[31..24]]
+        const auto c16_rev = hn::Reverse(d16_full, c16);  // [src[23..16]]
+
+        // O[0..7]  = src[0..7]  - src[31..24]
+        // O[8..15] = src[8..15] - src[23..16]
+        const auto O16_lo = hn::Sub(a16, e16_rev);
+        const auto O16_hi = hn::Sub(b16, c16_rev);
+
+        for (int k = 1; k < 32; k += 2)
+        {
+            const auto coef_lo = hn::LoadU(d16_full, &kT32[k][0]);
+            const auto coef_hi = hn::LoadU(d16_full, &kT32[k][8]);
+            const auto prod_lo = hn::WidenMulPairwiseAdd(d32_wide, O16_lo, coef_lo);
+            const auto prod_hi = hn::WidenMulPairwiseAdd(d32_wide, O16_hi, coef_hi);
+            const int32_t sum = hn::ReduceSum(d32_wide, hn::Add(prod_lo, prod_hi));
+            dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
+        }
+    }
+    else
+    {
+        // Pass 2: int32 form. Four Mul + three Add + ReduceSum per output.
+        for (int k = 1; k < 32; k += 2)
+        {
+            const auto c_a = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][0]));
+            const auto c_b = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][4]));
+            const auto c_c = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][8]));
+            const auto c_d = hn::PromoteTo(d32, hn::LoadU(d16_half, &kT32[k][12]));
+
+            const auto p_ab = hn::Add(hn::Mul(O_a, c_a), hn::Mul(O_b, c_b));
+            const auto p_cd = hn::Add(hn::Mul(O_c, c_c), hn::Mul(O_d, c_d));
+            const int32_t sum = hn::ReduceSum(d32, hn::Add(p_ab, p_cd));
+            dst[k * dstStride] = static_cast<int16_t>((sum + kAdd) >> Shift);
+        }
     }
 #else
     // SCALAR fallback for length-8 and length-16 dot products.
