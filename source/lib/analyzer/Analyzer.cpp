@@ -22,6 +22,7 @@
 #include <analyzer/EntropyCalculation.h>
 #include <analyzer/simd/targets.h>
 
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <stdexcept>
