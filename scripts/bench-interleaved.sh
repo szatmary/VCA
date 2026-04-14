@@ -61,6 +61,12 @@ cmake --build build-highway -j > /dev/null
 # --- Benchmark ---
 ARGS="--input $TOS_YUV --input-res 1920x800 --input-depth 8 --input-fps 24 --input-csp 420"
 
+# Seconds to sleep between runs so the machine can return to a
+# comparable thermal baseline. 30 s is enough for Apple silicon and
+# mainstream desktop x86 to shed most accumulated heat from a short
+# (< 20 s) run. Override with COOLDOWN=0 for a back-to-back run.
+COOLDOWN="${COOLDOWN:-30}"
+
 run() {
     local branch="$1" idx="$2"
     local bin="./build-$branch/source/apps/vca/vca"
@@ -71,16 +77,27 @@ run() {
     echo "  $branch run $idx: real=${t}s"
 }
 
+cooldown() {
+    if [ "$COOLDOWN" -gt 0 ]; then
+        echo "  (cooldown ${COOLDOWN}s)"
+        sleep "$COOLDOWN"
+    fi
+}
+
 echo
 echo "=== Warmup (discarded) ==="
 run stable 0
+cooldown
 run highway 0
+cooldown
 
 echo
 echo "=== Interleaved runs (stable, highway, stable, highway, ...) ==="
 for i in 1 2 3 4 5; do
     run stable $i
+    cooldown
     run highway $i
+    [ "$i" -lt 5 ] && cooldown
 done
 
 echo
