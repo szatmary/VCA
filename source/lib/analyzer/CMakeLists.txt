@@ -27,6 +27,8 @@ add_library(vcaInternal STATIC
     simd/dct8.h
     simd/dct_hwy.cpp
     simd/entropy.h
+    simd/targets.h
+    simd/targets.cpp
 )
 
 target_include_directories(vcaInternal PRIVATE ${LIB_SOURCE_DIR})
