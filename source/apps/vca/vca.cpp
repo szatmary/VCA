@@ -23,7 +23,6 @@
 #include <common/input/Y4MInput.h>
 #include <common/input/YUVInput.h>
 #include <common/stats/YUViewStatsFile.h>
-#include <lib/analyzer/simd/targets.h>
 #include <lib/vcaLib.h>
 
 #include <algorithm>
@@ -199,6 +198,7 @@ std::optional<CLIOptions> parseCLIOptions(int argc, char **argv)
         if (name == "no-simd")
         {
             options.vcaParam.enableSIMD = false;
+            options.vcaParam.cpuSimd    = CpuSimd::None;
         }
         else if (name == "no-energy-chroma")
             options.vcaParam.enableEnergyChroma = false;
@@ -579,12 +579,6 @@ int main(int argc, char **argv)
     }
 
     logOptions(options);
-
-    // If --no-simd was passed, constrain Highway to its scalar target.
-    // This is a process-global constraint and must happen before the
-    // analyzer is opened.
-    if (!options.vcaParam.enableSIMD)
-        vca::simd::ConstrainTargetsForCli("none");
 
     std::unique_ptr<IInputFile> inputFile;
     if (options.openAsY4m)

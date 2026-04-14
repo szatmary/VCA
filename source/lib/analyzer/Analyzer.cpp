@@ -48,10 +48,11 @@ Analyzer::Analyzer(vca_param cfg)
         throw std::invalid_argument("Invalid bit depth");
     }
 
-    // SIMD target selection is handled by Highway at runtime.
-    // The legacy vca_param::cpuSimd field is retained for ABI but ignored;
-    // the --asm CLI flag constrains Highway's target mask via
-    // vca::simd::ConstrainTargetsForCli() before the analyzer is created.
+    // SIMD target selection is handled by Highway at runtime. The
+    // vca_param::cpuSimd field is mapped onto an equivalent Highway
+    // target-mask constraint here. CpuSimd::Autodetect leaves Highway
+    // free to pick the best available target.
+    vca::simd::ConstrainTargetsForCli(cfg.cpuSimd);
     log(cfg, LogLevel::Info, "Using SIMD target: " + vca::simd::CurrentTargetName());
 
     if (cfg.nrFrameThreads == 0)

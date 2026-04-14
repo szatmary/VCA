@@ -49,19 +49,56 @@ enum class LogLevel
     Debug
 };
 
-enum class [[deprecated(
-    "CpuSimd is ignored as of the Highway SIMD port; Highway selects the "
-    "runtime target automatically. This enum will be removed in a future "
-    "version.")]]
-CpuSimd
+// CpuSimd is the public way to hint Highway's runtime SIMD target
+// selection. The analyzer maps each value to the corresponding Highway
+// target at startup via vca::simd::ConstrainTargetsForCli(). The default
+// (Autodetect) leaves Highway free to pick the best available target.
+//
+// Numeric values of the legacy 7 entries (Autodetect..NEON) are preserved
+// for binary ABI compatibility; new entries are appended at the end in
+// Highway's bit-preference order.
+enum class CpuSimd
 {
-    Autodetect,
-    None,
-    SSE2,
-    SSSE3,
-    SSE4,
-    AVX2,
-    NEON  // ARM64 NEON SIMD
+    // Legacy values - unchanged numeric positions (ABI stable).
+    Autodetect = 0,  // Let Highway pick the best supported target.
+    None       = 1,  // HWY_SCALAR: pure scalar fallback.
+    SSE2       = 2,  // HWY_SSE2 (x86).
+    SSSE3      = 3,  // HWY_SSSE3 (x86).
+    SSE4       = 4,  // HWY_SSE4 (x86, includes AES + CLMUL).
+    AVX2       = 5,  // HWY_AVX2 (x86).
+    NEON       = 6,  // HWY_NEON (ARM64, includes AES).
+
+    // x86 AVX-512 family and AVX10.
+    AVX10_2,         // HWY_AVX10_2 (AVX10.2 with 512-bit vectors).
+    AVX3_SPR,        // HWY_AVX3_SPR (Sapphire Rapids).
+    AVX3_ZEN4,       // HWY_AVX3_ZEN4 (Zen4-optimized AVX-512).
+    AVX3_DL,         // HWY_AVX3_DL (AVX-512 + VNNI + BF16).
+    AVX3,            // HWY_AVX3 (AVX-512 F/BW/CD/DQ/VL).
+
+    // ARM SVE / NEON variants.
+    SVE2_128,        // HWY_SVE2_128 (Neoverse V2/N2/N3, 128-bit).
+    SVE_256,         // HWY_SVE_256 (Neoverse V1, 256-bit).
+    SVE2,            // HWY_SVE2.
+    SVE,             // HWY_SVE.
+    NEON_BF16,       // HWY_NEON_BF16 (NEON + fp16/dotprod/bf16).
+    NEON_WITHOUT_AES,// HWY_NEON_WITHOUT_AES (NEON without AES extensions).
+
+    // RISC-V, LoongArch.
+    RVV,             // HWY_RVV (RISC-V Vector extension).
+    LASX,            // HWY_LASX (LoongArch LASX 256-bit).
+    LSX,             // HWY_LSX (LoongArch LSX 128-bit).
+
+    // IBM POWER and Z.
+    PPC10,           // HWY_PPC10 (POWER10 / ISA v3.1).
+    PPC9,            // HWY_PPC9 (POWER9 / ISA v3.0).
+    PPC8,            // HWY_PPC8 (POWER8 / ISA v2.07).
+    Z15,             // HWY_Z15.
+    Z14,             // HWY_Z14.
+
+    // WebAssembly and emulated fallback.
+    WASM_EMU256,     // HWY_WASM_EMU256 (experimental 256-bit emulation).
+    WASM,            // HWY_WASM (WebAssembly SIMD 128).
+    EMU128           // HWY_EMU128 (emulated 128-bit on scalar targets).
 };
 
 enum class vca_colorSpace
@@ -177,17 +214,11 @@ struct vca_param
     unsigned nrFrameThreads{0};
     unsigned nrSliceThreads{0};
 
-    // DEPRECATED: ignored since the Highway SIMD port. Highway selects the
-    // runtime SIMD target automatically. Field retained for ABI compatibility;
-    // will be removed in a future major version.
-#if defined(__GNUC__) || defined(__clang__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
+    // SIMD target hint. CpuSimd::Autodetect lets Highway pick the best
+    // supported target at runtime. Any other value constrains Highway
+    // to that specific target (or its closest equivalent on hosts where
+    // the exact target isn't available).
     CpuSimd cpuSimd{CpuSimd::Autodetect};
-#if defined(__GNUC__) || defined(__clang__)
-#    pragma GCC diagnostic pop
-#endif
 
     void (*logFunction)(void *, LogLevel, const char *){};
     void *logFunctionPrivateData{};
